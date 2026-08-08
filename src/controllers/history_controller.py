@@ -23,50 +23,73 @@ class HistoryController:
         self.view.pay_due_requested.connect(self.handle_pay_due)
         self.view.view_payment_history_requested.connect(self.handle_view_payment_history)
 
+    def show_customer_ledger(self, customer_id: int, customer_name: str):
+        """Entry point for cross-page navigation (Customers page's 'View Ledger'
+        button). main_window.py switches the visible page to History; this just
+        applies the filter once it's shown."""
+        self.view.apply_customer_filter(customer_id, customer_name)
+
     def _get_filtered_records(self, filter_dict: dict) -> list:
         """
-        Supports 4 filter modes:
+        Supports these filter modes:
+          - "quick_search": {"value": "..."}  — live, matches ACROSS Invoice ID,
+                             Customer Name, Phone, Date, effective Status, Grand
+                             Total, and effective Due, all at once. Empty value
+                             -> every record (the default/no-filter state).
           - "date":          {"start": QDate, "end": QDate}
-          - "invoice_id":    {"value": "25"}          — partial match on the numeric id
-          - "customer_name": {"value": "yryr"}        — case-insensitive partial match
-          - "status":        {"value": "Due"}         — matched against the EFFECTIVE status,
-                              which is a computed property (not a DB column), so this mode
-                              filters in Python after loading candidates rather than in SQL.
+          - "status":        {"value": "Due"}         — matched against the EFFECTIVE status
+          - "customer_id":   {"customer_id": 7}        — exact match, used only via
+                              apply_customer_filter() (Customers page "View Ledger")
+        "status" and "quick_search" match against effective_status / effective_due_amount,
+        which are computed properties (not DB columns), so both filter in Python
+        after loading candidates rather than in SQL.
         Only root/original sale invoices are returned — due-payment records stay nested
         (accessible via the "History" action), same as before.
         """
-        mode = filter_dict.get("mode", "date")
+        mode = filter_dict.get("mode", "quick_search")
 
         with get_db_session() as session:
             base_query = session.query(Invoice).join(Customer).filter(Invoice.is_due_payment == False)
 
-            if mode == "date":
+            if mode == "quick_search":
+                value = (filter_dict.get("value") or "").strip().lower()
+                candidates = base_query.order_by(Invoice.created_at.desc()).all()
+                if not value:
+                    invoices = candidates
+                else:
+                    invoices = []
+                    for inv in candidates:
+                        haystack = " ".join([
+                            str(inv.id),
+                            inv.customer.name or "",
+                            inv.customer.phone or "",
+                            to_local_str(inv.created_at),
+                            inv.effective_status,
+                            f"{inv.grand_total:.2f}",
+                            f"{inv.effective_due_amount:.2f}",
+                        ]).lower()
+                        if value in haystack:
+                            invoices.append(inv)
+
+            elif mode == "date":
                 start_dt = datetime.combine(filter_dict["start"].toPyDate(), time.min)
                 end_dt = datetime.combine(filter_dict["end"].toPyDate(), time.max)
                 invoices = base_query.filter(
                     Invoice.created_at.between(start_dt, end_dt)
                 ).order_by(Invoice.created_at.desc()).all()
 
-            elif mode == "invoice_id":
-                value = (filter_dict.get("value") or "").strip()
-                if not value:
-                    raise ValueError("Please enter an Invoice ID to search.")
-                invoices = base_query.filter(
-                    sa_cast(Invoice.id, String).like(f"%{value}%")
-                ).order_by(Invoice.created_at.desc()).all()
-
-            elif mode == "customer_name":
-                value = (filter_dict.get("value") or "").strip()
-                if not value:
-                    raise ValueError("Please enter a customer name to search.")
-                invoices = base_query.filter(
-                    Customer.name.ilike(f"%{value}%")
-                ).order_by(Invoice.created_at.desc()).all()
-
             elif mode == "status":
                 value = filter_dict.get("value", "")
                 candidates = base_query.order_by(Invoice.created_at.desc()).all()
                 invoices = [inv for inv in candidates if inv.effective_status == value]
+
+            elif mode == "customer_id":
+                customer_id = filter_dict.get("customer_id")
+                if not customer_id:
+                    raise ValueError("Invalid customer filter.")
+                invoices = base_query.filter(
+                    Invoice.customer_id == customer_id
+                ).order_by(Invoice.created_at.desc()).all()
 
             else:
                 invoices = []

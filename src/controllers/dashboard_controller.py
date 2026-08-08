@@ -14,13 +14,17 @@ class DashboardController:
     @staticmethod
     def _resolve_period(period_filter: dict):
         """Turns a period filter dict into (start_dt, end_dt, label) covering full-day
-        boundaries. Defaults to 'today' if no filter is given (e.g. on first app launch)."""
+        boundaries. start_dt/end_dt come back as None for 'all' (no date bound at all).
+        Defaults to 'today' if no filter is given (e.g. on first app launch)."""
         period_filter = period_filter or {"mode": "today"}
         mode = period_filter.get("mode", "today")
 
         if mode == "today":
             today = date.today()
             return datetime.combine(today, time.min), datetime.combine(today, time.max), "Today"
+
+        elif mode == "all":
+            return None, None, "All Time"
 
         elif mode == "month":
             month = period_filter["month"]
@@ -51,36 +55,54 @@ class DashboardController:
 
     def refresh_dashboard_data(self, period_filter: dict = None):
         """Queries database and feeds structured telemetry calculations to the View.
-        `period_filter` scopes the 4 KPI cards to Today/Month/Year/Date Range; the
+        `period_filter` scopes the 4 KPI cards to Today/All/Month/Year/Date Range; the
         'Recent 10 Records' feed below stays an unfiltered recent-activity list."""
         try:
             start_dt, end_dt, period_label = self._resolve_period(period_filter)
+            has_date_bound = start_dt is not None  # False only for "All Time"
 
             with get_db_session() as session:
-                # 1. KPI tiles: EXCLUDE due-payment records, scoped to the selected period.
+                # For "All Time", replace the plain label with the actual earliest/latest
+                # invoice dates once we know them — needs a DB query, so it happens here
+                # rather than in _resolve_period (which has no session access).
+                if not has_date_bound:
+                    first_dt, last_dt = session.query(
+                        func.min(Invoice.created_at), func.max(Invoice.created_at)
+                    ).filter(Invoice.is_due_payment == False).first()
+                    if first_dt and last_dt:
+                        first_date = to_local_str(first_dt).split(" ")[0]
+                        last_date = to_local_str(last_dt).split(" ")[0]
+                        period_label = f"All Time ({first_date} to {last_date})"
+                    else:
+                        period_label = "All Time (No records yet)"
+
+                # 1. KPI tiles: EXCLUDE due-payment records, scoped to the selected period
+                # (or unscoped entirely for "All Time").
+                invoice_filters = [Invoice.is_due_payment == False]
+                if has_date_bound:
+                    invoice_filters.append(Invoice.created_at.between(start_dt, end_dt))
+
                 invoices_stats = session.query(
                     func.count(Invoice.id).label("total_count"),
                     func.sum(Invoice.grand_total).label("total_revenue")
-                ).filter(
-                    Invoice.is_due_payment == False,
-                    Invoice.created_at.between(start_dt, end_dt)
-                ).first()
+                ).filter(*invoice_filters).first()
 
                 total_revenue = invoices_stats.total_revenue or 0.0
                 total_invoices = invoices_stats.total_count or 0
 
                 # 2. Itemized product volume splits — joined to Invoice so they respect
-                # the same period + is_due_payment exclusion (due-payments never have
-                # items anyway, but the join keeps the date scoping correct either way).
+                # the same period + is_due_payment exclusion.
+                item_filters_compost = [Invoice.is_due_payment == False, InvoiceItem.product_name.ilike("%compost%")]
+                item_filters_worms = [Invoice.is_due_payment == False, InvoiceItem.product_name.ilike("%worm%")]
+                if has_date_bound:
+                    item_filters_compost.append(Invoice.created_at.between(start_dt, end_dt))
+                    item_filters_worms.append(Invoice.created_at.between(start_dt, end_dt))
+
                 compost_stats = session.query(func.sum(InvoiceItem.quantity)).join(Invoice).filter(
-                    Invoice.is_due_payment == False,
-                    Invoice.created_at.between(start_dt, end_dt),
-                    InvoiceItem.product_name.ilike("%compost%")
+                    *item_filters_compost
                 ).scalar() or 0.0
                 worms_stats = session.query(func.sum(InvoiceItem.quantity)).join(Invoice).filter(
-                    Invoice.is_due_payment == False,
-                    Invoice.created_at.between(start_dt, end_dt),
-                    InvoiceItem.product_name.ilike("%worm%")
+                    *item_filters_worms
                 ).scalar() or 0.0
 
                 self.view.update_metrics(total_revenue, compost_stats, worms_stats, total_invoices, period_label)

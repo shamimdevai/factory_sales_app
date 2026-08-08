@@ -1,6 +1,6 @@
 import io
 from datetime import datetime
-from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
@@ -144,6 +144,11 @@ class PDFGenerator:
                                     styles['Normal'])])
         grid_data.append(["", "", Paragraph(f"<b>VAT ({invoice.tax_rate * 100:.1f}%):</b>", styles['Normal']),
                           Paragraph(f"{sym} {tax_amount:,.2f}", styles['Normal'])])
+        # Transportation — only appears on the invoice at all if the
+        # operator explicitly checked "show" for it at issuing time.
+        if invoice.show_transport_charge:
+            grid_data.append(["", "", Paragraph("<b>Transportation:</b>", styles['Normal']),
+                              Paragraph(f"{sym} {invoice.transport_charge:,.2f}", styles['Normal'])])
         grid_data.append(["", "", Paragraph("<b>Less Adjustment:</b>", styles['Normal']),
                           Paragraph(f"- {sym} {invoice.less_adjustment:,.2f}",
                                     styles['Normal'])])
@@ -158,6 +163,17 @@ class PDFGenerator:
                               f'<font color="{due_color}"><b>{sym} {effective_due:,.2f}</b></font>',
                               body_bold)])
 
+        # Number of trailing summary rows just appended (Subtotal through Balance Due).
+        # This varies (7 or 8) depending on whether the Transport row was included, so
+        # the TableStyle row indices below are computed from this rather than hardcoded —
+        # otherwise adding the conditional row would silently misalign the highlighted
+        # separator lines and alternating-row backgrounds.
+        num_summary_rows = 8 if invoice.show_transport_charge else 7
+        items_end_offset = -(num_summary_rows + 1)  # last item row, just before Subtotal
+        subtotal_offset = -num_summary_rows  # Subtotal row itself
+        # Grand Total / Amount Paid / Balance Due are always the last 3 rows regardless
+        # of Transport, since it's inserted earlier in the sequence.
+
         grid_table = Table(grid_data, colWidths=[240, 100, 100, 100])
         grid_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1c2833")),
@@ -166,11 +182,11 @@ class PDFGenerator:
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
             ('TOPPADDING', (0, 0), (-1, 0), 10),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, items_end_offset),
              [colors.white, pstyle.hex_with_alpha(pstyle.ITEMS_ALT_ROW_BG)]),
             ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
             # Highlighted separators: before Subtotal, and before Grand Total
-            ('LINEABOVE', (2, -7), (3, -7), 1.0, colors.HexColor("#1c2833")),
+            ('LINEABOVE', (2, subtotal_offset), (3, subtotal_offset), 1.0, colors.HexColor("#1c2833")),
             ('LINEABOVE', (2, -3), (3, -3), 1.0, colors.HexColor("#1c2833")),
             ('LINEABOVE', (2, -2), (3, -2), 0.5, colors.HexColor("#cbd5e1")),
             ('BACKGROUND', (0, -2), (-1, -1), pstyle.hex_with_alpha(pstyle.PAYMENT_BLOCK_BG)),
@@ -192,23 +208,42 @@ class PDFGenerator:
 
         story.append(Spacer(1, 20))
 
-        # 4. Signature (right-aligned block)
-        right_body_style = ParagraphStyle('RightBody', parent=styles['Normal'], alignment=TA_RIGHT)
-        right_meta_style = ParagraphStyle('RightMeta', parent=meta_style, alignment=TA_RIGHT)
+        # 4. Signature Block (All elements centered inside a right-aligned container)
+        sig_body_style = ParagraphStyle('SigBody', parent=styles['Normal'], alignment=TA_CENTER)
+        sig_text_style = ParagraphStyle('SigText', parent=meta_style, alignment=TA_CENTER)
 
-        sig_elements = [Paragraph(f"Prepared By: <b>{creator.name}</b>", right_body_style), Spacer(1, 5)]
+        sig_block_elements = [
+            Paragraph(f"Prepared By: <b>{creator.name}</b>", sig_body_style),
+            Spacer(1, 14),  # Greater spacing above the image
+        ]
+
         if creator.digital_signature:
             try:
                 sig_image = Image(io.BytesIO(creator.digital_signature), width=120, height=45)
-                sig_image.hAlign = 'RIGHT'
-                sig_elements.append(sig_image)
+                sig_image.hAlign = 'CENTER'
+                sig_block_elements.append(sig_image)
             except Exception as e:
                 print(f"[PDF Engine Warning]: Failed to paste digital signature object: {e}")
         else:
-            sig_elements.append(Spacer(1, 20))
-        sig_elements.append(
-            Paragraph("____________________________<br/>Authorized Signature", right_meta_style))
-        story.append(KeepTogether(sig_elements))
+            sig_block_elements.append(Spacer(1, 45))
+
+        sig_block_elements.append(Spacer(1, 3))  # Smaller spacing between image and line
+        sig_block_elements.append(
+            Paragraph("____________________________<br/>Authorized Signature", sig_text_style)
+        )
+
+        sig_table = Table([[item] for item in sig_block_elements], colWidths=[180])
+        sig_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        sig_table.hAlign = 'RIGHT'
+
+        story.append(KeepTogether(sig_table))
 
         doc.build(story, onFirstPage=PDFGenerator._draw_footer, onLaterPages=PDFGenerator._draw_footer)
         return True
@@ -347,23 +382,42 @@ class PDFGenerator:
         story.append(status_para)
         story.append(Spacer(1, 25))
 
-        # 5. Signature
-        right_body_style = ParagraphStyle('RightBody', parent=styles['Normal'], alignment=TA_RIGHT)
-        right_meta_style = ParagraphStyle('RightMeta', parent=meta_style, alignment=TA_RIGHT)
+        # 5. Signature Block (All elements centered inside a right-aligned container)
+        sig_body_style = ParagraphStyle('SigBody', parent=styles['Normal'], alignment=TA_CENTER)
+        sig_text_style = ParagraphStyle('SigText', parent=meta_style, alignment=TA_CENTER)
 
-        sig_elements = [Paragraph(f"Received By: <b>{creator.name}</b>", right_body_style), Spacer(1, 5)]
+        sig_block_elements = [
+            Paragraph(f"Received By: <b>{creator.name}</b>", sig_body_style),
+            Spacer(1, 14),  # Greater spacing above the image
+        ]
+
         if creator.digital_signature:
             try:
                 sig_image = Image(io.BytesIO(creator.digital_signature), width=120, height=45)
-                sig_image.hAlign = 'RIGHT'
-                sig_elements.append(sig_image)
+                sig_image.hAlign = 'CENTER'
+                sig_block_elements.append(sig_image)
             except Exception as e:
                 print(f"[PDF Engine Warning]: Failed to paste digital signature object: {e}")
         else:
-            sig_elements.append(Spacer(1, 20))
-        sig_elements.append(
-            Paragraph("____________________________<br/>Authorized Signature", right_meta_style))
-        story.append(KeepTogether(sig_elements))
+            sig_block_elements.append(Spacer(1, 45))
+
+        sig_block_elements.append(Spacer(1, 3))  # Smaller spacing between image and line
+        sig_block_elements.append(
+            Paragraph("____________________________<br/>Authorized Signature", sig_text_style)
+        )
+
+        sig_table = Table([[item] for item in sig_block_elements], colWidths=[180])
+        sig_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        sig_table.hAlign = 'RIGHT'
+
+        story.append(KeepTogether(sig_table))
 
         doc.build(story, onFirstPage=PDFGenerator._draw_footer, onLaterPages=PDFGenerator._draw_footer)
         return True

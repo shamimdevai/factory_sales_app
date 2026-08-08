@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from src.config import company_config as cfg
+from src.config import theme
 
 
 class DuePaymentDialog(QDialog):
@@ -41,7 +42,7 @@ class DuePaymentDialog(QDialog):
         self.amount_spin.setDecimals(2)
         self.amount_spin.setPrefix(f"{cfg.CURRENCY_SYMBOL} ")
         self.amount_spin.setValue(due_amount)  # default to full remaining due
-        self.amount_spin.setStyleSheet("QDoubleSpinBox { padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; }")
+        self.amount_spin.setStyleSheet(theme.input_style("QDoubleSpinBox"))
         layout.addWidget(self.amount_spin)
 
         btn_row = QHBoxLayout()

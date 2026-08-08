@@ -10,12 +10,16 @@ from src.views.dashboard_view import DashboardView
 from src.views.invoice_view import InvoiceView
 from src.views.history_view import HistoryView
 from src.views.profile_view import ProfileView
+from src.views.customer_view import CustomerView
+from src.views.settings_view import SettingsView
 
 # Controllers
 from src.controllers.dashboard_controller import DashboardController
 from src.controllers.invoice_controller import InvoiceController
 from src.controllers.history_controller import HistoryController
 from src.controllers.profile_controller import ProfileController
+from src.controllers.customer_controller import CustomerController
+from src.controllers.settings_controller import SettingsController
 
 #Config
 from src.config import company_config as cfg
@@ -80,9 +84,15 @@ class MainWindow(QMainWindow):
         self.btn_dashboard = QPushButton("📊 Dashboard")
         self.btn_invoice = QPushButton("📄 Invoice Terminal")
         self.btn_history = QPushButton("📜 Sales History Ledger")
+        self.btn_customers = QPushButton("👥 Customers")
+        self.btn_settings = QPushButton("⚙️ Settings")
         self.btn_profile = QPushButton("👤 Operator Profile")
 
-        for btn in [self.btn_dashboard, self.btn_invoice, self.btn_history, self.btn_profile]:
+        self._nav_buttons = [
+            self.btn_dashboard, self.btn_invoice, self.btn_history,
+            self.btn_customers, self.btn_settings, self.btn_profile
+        ]
+        for btn in self._nav_buttons:
             btn.setStyleSheet(btn_style)
             btn.setCheckable(True)
             sidebar_layout.addWidget(btn)
@@ -91,7 +101,9 @@ class MainWindow(QMainWindow):
         self.btn_dashboard.clicked.connect(lambda: self._switch_view(0, self.btn_dashboard))
         self.btn_invoice.clicked.connect(lambda: self._switch_view(1, self.btn_invoice))
         self.btn_history.clicked.connect(lambda: self._switch_view(2, self.btn_history))
-        self.btn_profile.clicked.connect(lambda: self._switch_view(3, self.btn_profile))
+        self.btn_customers.clicked.connect(lambda: self._switch_view(3, self.btn_customers))
+        self.btn_settings.clicked.connect(lambda: self._switch_view(4, self.btn_settings))
+        self.btn_profile.clicked.connect(lambda: self._switch_view(5, self.btn_profile))
 
         sidebar_layout.addStretch()
 
@@ -108,19 +120,30 @@ class MainWindow(QMainWindow):
         self.dashboard_view = DashboardView()
         self.invoice_view = InvoiceView()
         self.history_view = HistoryView()
+        self.customer_view = CustomerView()
+        self.settings_view = SettingsView()
         self.profile_view = ProfileView()
 
         self.dashboard_controller = DashboardController(self.dashboard_view)
         self.invoice_controller = InvoiceController(self.invoice_view)
         self.history_controller = HistoryController(self.history_view)
+        self.customer_controller = CustomerController(self.customer_view)
+        self.settings_controller = SettingsController(self.settings_view)
         self.profile_controller = ProfileController(self.profile_view)
+
+        # Cross-page navigation: Customers page's "View Ledger" action jumps to
+        # History Ledger pre-filtered to that customer. This lives here (not in
+        # either controller) so CustomerController/HistoryController stay decoupled.
+        self.customer_view.view_ledger_requested.connect(self._go_to_customer_ledger)
 
         # Wrap each screen in a QScrollArea so content scrolls instead of
         # clipping on smaller screens/resolutions
         self.stacked_widget.addWidget(self._wrap_scrollable(self.dashboard_view))  # Index 0
         self.stacked_widget.addWidget(self._wrap_scrollable(self.invoice_view))    # Index 1
         self.stacked_widget.addWidget(self._wrap_scrollable(self.history_view))    # Index 2
-        self.stacked_widget.addWidget(self._wrap_scrollable(self.profile_view))    # Index 3
+        self.stacked_widget.addWidget(self._wrap_scrollable(self.customer_view))   # Index 3
+        self.stacked_widget.addWidget(self._wrap_scrollable(self.settings_view))   # Index 4
+        self.stacked_widget.addWidget(self._wrap_scrollable(self.profile_view))    # Index 5
 
         layout.addWidget(sidebar)
         layout.addWidget(self.stacked_widget)
@@ -157,7 +180,7 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _switch_view(self, index: int, active_button: QPushButton):
-        for btn in [self.btn_dashboard, self.btn_invoice, self.btn_history, self.btn_profile]:
+        for btn in self._nav_buttons:
             btn.setChecked(False)
 
         active_button.setChecked(True)
@@ -165,5 +188,21 @@ class MainWindow(QMainWindow):
 
         if index == 0:
             self.dashboard_controller.refresh_dashboard_data(self.dashboard_view.get_current_period())
+        elif index == 1:
+            # Keeps the customer picker in sync with anything added/edited on
+            # the Customers or Settings pages since this page was last shown.
+            self.invoice_controller.refresh_customer_list()
         elif index == 2:
             self.history_controller.load_records(self.history_view.get_current_filter())
+        elif index == 3:
+            self.customer_controller.refresh_all()
+        elif index == 4:
+            self.settings_controller.refresh_all()
+
+    def _go_to_customer_ledger(self, customer_id: int, customer_name: str):
+        """Customers page 'View Ledger' -> History Ledger, pre-filtered.
+        Order matters: apply the filter first so that when _switch_view's own
+        index==2 branch calls load_records(get_current_filter()), it picks up
+        the same customer_id override rather than the default date-range."""
+        self.history_controller.show_customer_ledger(customer_id, customer_name)
+        self._switch_view(2, self.btn_history)

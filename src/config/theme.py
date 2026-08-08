@@ -20,7 +20,7 @@ BORDER_COLOR = "#CBD5E1"
 ACCENT = "#1ABC9C"
 ACCENT_DARK = "#16A085"
 
-# --- Text ---
+# --- Text (Drop-Down Menu) ---
 TEXT_PRIMARY = "#2C3E50"
 TEXT_MUTED = "#7F8C8D"
 
@@ -32,9 +32,17 @@ def card_frame_style() -> str:
 
 def input_style(widget_selector: str = "QLineEdit") -> str:
     """Standard bordered input field style, parametrized by widget type
-    (QLineEdit, QDoubleSpinBox, QDateEdit, QComboBox, etc.)."""
-    return (f"{widget_selector} {{ padding: 5px; border: 1px solid {BORDER_COLOR}; "
+    (QLineEdit, QDoubleSpinBox, QDateEdit, QComboBox, etc.).
+
+    If "QComboBox" appears anywhere in widget_selector, the dropdown popup
+    styling (combobox_dropdown_style()) is automatically appended too — so
+    every combobox in the app gets working hover/selection text color by
+    default, without each caller having to remember to add it separately."""
+    base = (f"{widget_selector} {{ padding: 5px; border: 1px solid {BORDER_COLOR}; "
             f"border-radius: 4px; background: {CARD_BACKGROUND}; color: {TEXT_PRIMARY}; }}")
+    if "QComboBox" in widget_selector:
+        base += combobox_dropdown_style()
+    return base
 
 
 def combobox_dropdown_style() -> str:

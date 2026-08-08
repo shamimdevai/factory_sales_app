@@ -1,9 +1,11 @@
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
 from src.database.connection import get_db_session
-from src.database.models import Customer, Invoice, InvoiceItem, User
+from src.database.models import Customer, CustomerType, Invoice, InvoiceItem, User
 from src.views.invoice_view import InvoiceView
 from src.utils.pdf_generator import PDFGenerator
+from src.utils.tier_engine import evaluate_customer_status, build_status_color_map
 from src.config import company_config as cfg
+from src.config import theme
 
 
 class InvoiceController:
@@ -16,6 +18,72 @@ class InvoiceController:
         self.view.billing_changed.connect(self._sync_view_data)
         self.view.submit_invoice_requested.connect(self.commit_invoice)
         self.view.generate_pdf_requested.connect(self.generate_invoice_pdf)
+        self.view.add_new_customer_requested.connect(self.add_new_customer_inline)
+        # NOTE: view.customer_selected is not connected -- the view already has
+        # everything it needs (phone/type/status) embedded in the combo's
+        # itemData, set once in refresh_customer_list() below. The signal is
+        # left available as a hook in case a future feature needs it.
+
+        self.refresh_customer_list()
+
+    def refresh_customer_list(self):
+        """Loads all customers (with live Status) into the picker, plus the
+        Customer Type choices for the inline Add-New form. Call this once on
+        page construction, and again any time the customer list may have
+        changed elsewhere (e.g. main_window.py re-calls this when switching
+        back to the Invoice Terminal, so customers added via the Customers/
+        Settings pages show up without restarting the app)."""
+        try:
+            with get_db_session() as session:
+                color_map, standard_color = build_status_color_map(session, theme.TEXT_MUTED)
+                customers = session.query(Customer).order_by(Customer.name.asc()).all()
+                records = []
+                for c in customers:
+                    status_info = evaluate_customer_status(c.id, session)
+                    tier = status_info["effective_tier"]
+                    status_color = color_map.get(tier.id) if tier else standard_color
+                    records.append({
+                        "id": c.id,
+                        "name": c.name,
+                        "phone": c.phone,
+                        "email": c.email,
+                        "address": c.address,
+                        "type_id": c.customer_type_id,
+                        "type_name": c.customer_type.name if c.customer_type else None,
+                        "status_name": status_info["display_name"],
+                        "status_color": status_color,
+                    })
+
+                types = session.query(CustomerType).order_by(CustomerType.name.asc()).all()
+                type_choices = [{"id": t.id, "name": t.name} for t in types]
+
+            self.view.populate_customer_list(records)
+            self.view.populate_type_choices(type_choices)
+        except Exception as e:
+            QMessageBox.critical(self.view, "Error", f"Failed to load customer list: {e}")
+
+    def add_new_customer_inline(self, data: dict):
+        try:
+            with get_db_session() as session:
+                existing = session.query(Customer).filter(Customer.phone == data["phone"]).first()
+                if existing:
+                    QMessageBox.warning(
+                        self.view, "Duplicate Phone",
+                        f"A customer with phone '{data['phone']}' already exists ({existing.name})."
+                    )
+                    return
+                new_customer = Customer(
+                    name=data["name"], phone=data["phone"], email=data["email"] or None,
+                    address=data["address"] or None, customer_type_id=data["customer_type_id"]
+                )
+                session.add(new_customer)
+                session.flush()
+                new_id = new_customer.id
+
+            self.refresh_customer_list()
+            self.view.select_customer_by_id(new_id)
+        except Exception as e:
+            QMessageBox.critical(self.view, "Error", f"Failed to add customer: {e}")
 
     def add_item_to_cart(self, name: str, qty: float, price: float):
         subtotal = qty * price
@@ -36,14 +104,15 @@ class InvoiceController:
         subtotal = sum(item["subtotal"] for item in self.cart_items)
         discount = self.view.get_discount()
         tax_rate = self.view.get_tax_rate()
+        transport = self.view.get_transport_charge()
         adjustment = self.view.get_less_adjustment()
 
         taxable_amount = max(subtotal - discount, 0.0)
         tax = taxable_amount * tax_rate
-        grand_total = max(taxable_amount + tax - adjustment, 0.0)
+        grand_total = max(taxable_amount + tax + transport - adjustment, 0.0)
 
         self.view.update_items_table(self.cart_items)
-        self.view.update_metrics(subtotal, discount, tax, adjustment, grand_total)
+        self.view.update_metrics(subtotal, discount, tax, transport, adjustment, grand_total)
 
     def commit_invoice(self, data: dict):
         if not self.cart_items:
@@ -52,17 +121,16 @@ class InvoiceController:
 
         try:
             with get_db_session() as session:
-                # 1. Fetch or create Customer
-                customer = session.query(Customer).filter_by(phone=data["customer_phone"]).first()
+                # 1. Fetch the selected Customer. Selection now happens explicitly
+                # via the search/select combo or the inline "Add New Customer"
+                # flow in the Customer Details box -- no more blind
+                # overwrite-by-phone (that used to silently rename a returning
+                # customer if the operator typed their name slightly differently).
+                customer = session.query(Customer).get(data["customer_id"])
                 if not customer:
-                    customer = Customer(name=data["customer_name"], phone=data["customer_phone"],
-                                         email=data["customer_email"], address=data["customer_address"])
-                    session.add(customer)
-                    session.flush()
-                else:
-                    customer.name = data["customer_name"]
-                    customer.email = data["customer_email"]
-                    customer.address = data["customer_address"]
+                    QMessageBox.critical(self.view, "Error",
+                                         "Selected customer was not found. Please reselect and try again.")
+                    return
 
                 # 2. Get active user or fallback operator
                 active_user = session.query(User).first()
@@ -77,13 +145,20 @@ class InvoiceController:
                     session.flush()
 
                 # 3. Financial calculations
+
+                # taxable_amount = subtotal − discount
+                # VAT_amount = taxable_amount × VAT_rate
+                # grand_total = taxable_amount + VAT_amount + transport_charge − less_adjustment(clamped ≥ 0)
+
                 subtotal = sum(item["subtotal"] for item in self.cart_items)
                 discount = max(data.get("discount", 0.0), 0.0)
                 tax_rate = max(data.get("tax_rate", 0.0), 0.0)
+                transport = max(data.get("transport_charge", 0.0), 0.0)
+                show_transport = bool(data.get("show_transport_charge", False))
                 adjustment = max(data.get("less_adjustment", 0.0), 0.0)
                 taxable_amount = max(subtotal - discount, 0.0)
                 tax_amount = taxable_amount * tax_rate
-                grand_total = max(taxable_amount + tax_amount - adjustment, 0.0)
+                grand_total = max(taxable_amount + tax_amount + transport - adjustment, 0.0)
                 paid_amount = max(data.get("paid_amount", 0.0), 0.0)
 
                 # 4. Save Invoice Document
@@ -94,6 +169,8 @@ class InvoiceController:
                     discount_amount=discount,
                     tax_rate=tax_rate,
                     less_adjustment=adjustment,
+                    transport_charge=transport,
+                    show_transport_charge=show_transport,
                     grand_total=grand_total,
                     paid_amount=paid_amount,
                     payment_status=data["payment_status"]
@@ -163,6 +240,8 @@ class InvoiceController:
                 discount_amount=0.0,
                 tax_rate=0.0,
                 less_adjustment=0.0,
+                transport_charge=0.0,
+                show_transport_charge=False,
                 grand_total=0.0,
                 paid_amount=amount,
                 payment_status="Paid",  # this transaction itself is a completed payment

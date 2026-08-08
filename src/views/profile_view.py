@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QFont
+from src.config import theme
 
 class ProfileView(QWidget):
     save_profile_requested = pyqtSignal(str, str, str, str) # Name, Username, Email, Password
@@ -28,7 +29,7 @@ class ProfileView(QWidget):
 
         # 1. Left side: Form Inputs
         form_frame = QFrame()
-        form_frame.setStyleSheet("QFrame { background-color: white; border-radius: 6px; border: 1px solid #cbd5e1; }")
+        form_frame.setStyleSheet(theme.card_frame_style())
         form_layout = QVBoxLayout(form_frame)
         form_layout.setContentsMargins(20, 20, 20, 20)
 
@@ -48,7 +49,7 @@ class ProfileView(QWidget):
         self.txt_password.setPlaceholderText("Leave blank to keep current password")
 
         # Basic input Styling
-        input_style = "QLineEdit { padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; color: #2c3e50; }"
+        input_style = theme.input_style("QLineEdit")
         for f in [self.txt_name, self.txt_username, self.txt_email, self.txt_password]:
             f.setStyleSheet(input_style)
 
@@ -68,7 +69,7 @@ class ProfileView(QWidget):
         # 2. Right side: Signature Upload Widget
         sig_frame = QFrame()
         sig_frame.setFixedWidth(300)
-        sig_frame.setStyleSheet("QFrame { background-color: white; border-radius: 6px; border: 1px solid #cbd5e1; }")
+        sig_frame.setStyleSheet(theme.card_frame_style())
         sig_layout = QVBoxLayout(sig_frame)
         sig_layout.setContentsMargins(20, 20, 20, 20)
 
@@ -78,7 +79,7 @@ class ProfileView(QWidget):
         sig_layout.addWidget(lbl_sig)
 
         self.lbl_sig_preview = QLabel("No Signature Loaded")
-        self.lbl_sig_preview.setStyleSheet("QLabel { background-color: #f8f9fa; border: 2px dashed #cbd5e1; border-radius: 4px; color: #7f8c8d; }")
+        self.lbl_sig_preview.setStyleSheet(f"QLabel {{ background-color: #f8f9fa; border: 2px dashed {theme.BORDER_COLOR}; border-radius: 4px; color: {theme.TEXT_MUTED}; }}")
         self.lbl_sig_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_sig_preview.setFixedSize(260, 100)
         sig_layout.addWidget(self.lbl_sig_preview)

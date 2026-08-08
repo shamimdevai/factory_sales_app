@@ -1,10 +1,10 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QDateEdit, QFrame, QMessageBox, QFileDialog,
-    QComboBox, QLineEdit
+    QComboBox, QLineEdit, QToolButton, QMenu
 )
-from PyQt6.QtCore import Qt, QDate, pyqtSignal
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtCore import Qt, QDate, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont, QColor, QAction
 from src.config import company_config as cfg
 from src.config import theme
 
@@ -20,6 +20,7 @@ class HistoryView(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._customer_filter_active = None  # set via apply_customer_filter(); overrides everything below
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(25, 25, 25, 25)
         self.main_layout.setSpacing(15)
@@ -30,8 +31,32 @@ class HistoryView(QWidget):
         title.setStyleSheet("color: #2c3e50;")
         self.main_layout.addWidget(title)
 
+        self._init_customer_filter_banner()
         self._init_filter_bar()
         self._init_history_table()
+
+    def _init_customer_filter_banner(self):
+        """Hidden by default. Shown only when navigated here via a Customer's
+        'View Ledger' action (see apply_customer_filter)."""
+        self.customer_filter_banner = QFrame()
+        self.customer_filter_banner.setStyleSheet(
+            f"QFrame {{ background: {theme.PAGE_BACKGROUND}; border: 1px solid {theme.ACCENT}; border-radius: 6px; }}")
+        self.customer_filter_banner.setVisible(False)
+        banner_layout = QHBoxLayout(self.customer_filter_banner)
+        banner_layout.setContentsMargins(12, 8, 12, 8)
+
+        self.lbl_customer_filter = QLabel("")
+        self.lbl_customer_filter.setStyleSheet(f"border: none; font-weight: bold; color: {theme.ACCENT_DARK};")
+        banner_layout.addWidget(self.lbl_customer_filter)
+        banner_layout.addStretch()
+
+        btn_clear = QPushButton("✖ Clear Filter")
+        btn_clear.setStyleSheet(
+            "QPushButton { background-color: #95a5a6; color: white; padding: 4px 12px; border-radius: 4px; } QPushButton:hover { background-color: #7f8c8d; }")
+        btn_clear.clicked.connect(self._on_clear_customer_filter)
+        banner_layout.addWidget(btn_clear)
+
+        self.main_layout.addWidget(self.customer_filter_banner)
 
     def _init_filter_bar(self):
         filter_frame = QFrame()
@@ -42,15 +67,30 @@ class HistoryView(QWidget):
 
         input_style = theme.input_style("QDateEdit, QLineEdit, QComboBox")
 
-        # "Filter By" mode selector
+        # "Filter By" mode selector -- "Quick Search" is the default/first mode
         layout.addWidget(QLabel("Filter By:"))
         self.filter_by_combo = QComboBox()
-        self.filter_by_combo.addItems(["Date Range", "Invoice ID", "Customer Name", "Status"])
+        self.filter_by_combo.addItems(["Quick Search", "Date Range", "Status"])
         self.filter_by_combo.setStyleSheet(input_style)
         self.filter_by_combo.currentTextChanged.connect(self._on_filter_mode_changed)
         layout.addWidget(self.filter_by_combo)
 
-        # --- Date Range inputs (default mode) ---
+        # --- Quick Search (default mode): one box, live/auto, searches everything ---
+        self.quick_search_input = QLineEdit()
+        self.quick_search_input.setPlaceholderText(
+            "Search by Invoice ID, Name, Phone, Date, Status, or Amount...")
+        self.quick_search_input.setStyleSheet(input_style)
+        self.quick_search_input.textChanged.connect(self._on_quick_search_text_changed)
+        layout.addWidget(self.quick_search_input, 1)
+
+        # Debounce: wait for a short pause in typing before actually querying,
+        # so we don't hit the DB on every single keystroke.
+        self._quick_search_timer = QTimer(self)
+        self._quick_search_timer.setSingleShot(True)
+        self._quick_search_timer.setInterval(300)
+        self._quick_search_timer.timeout.connect(self._emit_quick_search)
+
+        # --- Date Range inputs ---
         self.date_range_widget = QWidget()
         date_range_layout = QHBoxLayout(self.date_range_widget)
         date_range_layout.setContentsMargins(0, 0, 0, 0)
@@ -65,21 +105,8 @@ class HistoryView(QWidget):
         date_range_layout.addWidget(self.date_start)
         date_range_layout.addWidget(QLabel("End Date:"))
         date_range_layout.addWidget(self.date_end)
+        self.date_range_widget.setVisible(False)
         layout.addWidget(self.date_range_widget)
-
-        # --- Invoice ID input ---
-        self.invoice_id_input = QLineEdit()
-        self.invoice_id_input.setPlaceholderText("Enter Invoice ID (e.g. 25)")
-        self.invoice_id_input.setStyleSheet(input_style)
-        self.invoice_id_input.setVisible(False)
-        layout.addWidget(self.invoice_id_input)
-
-        # --- Customer Name input ---
-        self.customer_name_input = QLineEdit()
-        self.customer_name_input.setPlaceholderText("Enter Customer Name")
-        self.customer_name_input.setStyleSheet(input_style)
-        self.customer_name_input.setVisible(False)
-        layout.addWidget(self.customer_name_input)
 
         # --- Status dropdown ---
         self.status_combo = QComboBox()
@@ -88,29 +115,57 @@ class HistoryView(QWidget):
         self.status_combo.setVisible(False)
         layout.addWidget(self.status_combo)
 
-        # Search button (renamed from "Filter")
-        btn_search = QPushButton("🔍 Search")
-        btn_search.setStyleSheet(
+        # Search button -- only needed for Date Range / Status (explicit-action modes)
+        self.btn_search = QPushButton("🔍 Search")
+        self.btn_search.setStyleSheet(
             "QPushButton { background-color: #34495e; color: white; padding: 6px 15px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #2c3e50; }")
-        btn_search.clicked.connect(self._on_search_clicked)
-        layout.addWidget(btn_search)
+        self.btn_search.clicked.connect(self._on_search_clicked)
+        layout.addWidget(self.btn_search)
 
-        # Export Buttons
-        self.btn_export_excel = QPushButton("🟢 Export to Excel")
-        self.btn_export_excel.setStyleSheet(
-            "QPushButton { background-color: #27ae60; color: white; padding: 6px 15px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #219653; }")
-        self.btn_export_excel.clicked.connect(self._on_export_excel_clicked)
+        # Clear Search -- always available, resets everything back to
+        # "Quick Search" mode with an empty box (i.e. show all records).
+        btn_clear_search = QPushButton("✖ Clear Search")
+        btn_clear_search.setStyleSheet(
+            "QPushButton { background-color: #95a5a6; color: white; padding: 6px 15px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #7f8c8d; }")
+        btn_clear_search.clicked.connect(self._on_clear_search_clicked)
+        layout.addWidget(btn_clear_search)
 
-        self.btn_export_pdf = QPushButton("🔴 Export Summary PDF")
-        self.btn_export_pdf.setStyleSheet(
-            "QPushButton { background-color: #c0392b; color: white; padding: 6px 15px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #a33226; }")
-        self.btn_export_pdf.clicked.connect(self._on_export_pdf_clicked)
+        # Single "Export" button with a dropdown menu -- click to reveal PDF/Excel,
+        # easy to add more formats later without adding more buttons to this row.
+        self.btn_export = QToolButton()
+        self.btn_export.setText("⬇ Export")
+        self.btn_export.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_export.setStyleSheet(
+            "QToolButton { background-color: #16a085; color: white; padding: 6px 15px; font-weight: bold; border-radius: 4px; } "
+            "QToolButton:hover { background-color: #138a72; }")
+
+        export_menu = QMenu(self.btn_export)
+        export_menu.setStyleSheet(
+            f"QMenu {{ background-color: {theme.CARD_BACKGROUND}; border: 1px solid {theme.BORDER_COLOR}; padding: 4px; }} "
+            f"QMenu::item {{ padding: 8px 24px 8px 12px; border-radius: 3px; }} "
+            f"QMenu::item:selected {{ background-color: {theme.ACCENT}; color: white; }}")
+
+        self.action_export_pdf = QAction("🔴 Export to PDF", self)
+        self.action_export_pdf.triggered.connect(self._on_export_pdf_clicked)
+        export_menu.addAction(self.action_export_pdf)
+
+        self.action_export_excel = QAction("🟢 Export to Excel", self)
+        self.action_export_excel.triggered.connect(self._on_export_excel_clicked)
+        export_menu.addAction(self.action_export_excel)
+
+        self.btn_export.setMenu(export_menu)
 
         layout.addStretch()
-        layout.addWidget(self.btn_export_excel)
-        layout.addWidget(self.btn_export_pdf)
+        layout.addWidget(self.btn_export)
 
         self.main_layout.addWidget(filter_frame)
+
+        # Apply correct initial widget visibility for the default mode -- this
+        # method is otherwise only triggered by the combo's currentTextChanged
+        # signal, which does NOT fire just from building the widgets above, so
+        # without this the Search button incorrectly stays visible on first
+        # load until the operator manually changes mode or clicks Clear Search.
+        self._on_filter_mode_changed(self.filter_by_combo.currentText())
 
     def _init_history_table(self):
         self.table = QTableWidget()
@@ -126,6 +181,7 @@ class HistoryView(QWidget):
         for col, width in enumerate(column_widths):
             self.table.setColumnWidth(col, width)
 
+        self.table.verticalHeader().setVisible(False)  # no default row-number column
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -135,31 +191,72 @@ class HistoryView(QWidget):
 
     def _on_filter_mode_changed(self, mode: str):
         """Show only the input widget(s) relevant to the selected filter mode."""
+        self.quick_search_input.setVisible(mode == "Quick Search")
         self.date_range_widget.setVisible(mode == "Date Range")
-        self.invoice_id_input.setVisible(mode == "Invoice ID")
-        self.customer_name_input.setVisible(mode == "Customer Name")
         self.status_combo.setVisible(mode == "Status")
+        self.btn_search.setVisible(mode != "Quick Search")  # Quick Search is live, no button needed
+
+        # Manually picking a filter mode means the operator wants a fresh
+        # search -- drop any customer-ledger override from apply_customer_filter().
+        if self._customer_filter_active is not None:
+            self._customer_filter_active = None
+            self.customer_filter_banner.setVisible(False)
+
+        if mode == "Quick Search":
+            self._emit_quick_search()  # show current/empty quick-search results immediately
 
     def get_current_filter(self) -> dict:
-        """Builds the filter dict for whichever mode is currently selected."""
+        """Builds the filter dict for whichever mode is currently selected. An
+        active customer-ledger override (see apply_customer_filter) takes
+        priority over the Filter By dropdown until explicitly cleared."""
+        if self._customer_filter_active is not None:
+            return self._customer_filter_active
         mode = self.filter_by_combo.currentText()
-        if mode == "Date Range":
+        if mode == "Quick Search":
+            return {"mode": "quick_search", "value": self.quick_search_input.text().strip()}
+        elif mode == "Date Range":
             return {"mode": "date", "start": self.date_start.date(), "end": self.date_end.date()}
-        elif mode == "Invoice ID":
-            return {"mode": "invoice_id", "value": self.invoice_id_input.text().strip()}
-        elif mode == "Customer Name":
-            return {"mode": "customer_name", "value": self.customer_name_input.text().strip()}
         elif mode == "Status":
             return {"mode": "status", "value": self.status_combo.currentText()}
-        return {"mode": "date", "start": self.date_start.date(), "end": self.date_end.date()}
+        return {"mode": "quick_search", "value": ""}
 
     def _on_search_clicked(self):
-        filter_dict = self.get_current_filter()
-        if filter_dict["mode"] in ("invoice_id", "customer_name") and not filter_dict.get("value"):
-            label = "Invoice ID" if filter_dict["mode"] == "invoice_id" else "Customer Name"
-            QMessageBox.warning(self, "Missing Input", f"Please enter a value to search by {label}.")
-            return
-        self.search_requested.emit(filter_dict)
+        self.search_requested.emit(self.get_current_filter())
+
+    def _on_quick_search_text_changed(self, text: str):
+        self._quick_search_timer.start()  # restarts on every keystroke; fires 300ms after typing pauses
+
+    def _emit_quick_search(self):
+        self.search_requested.emit(self.get_current_filter())
+
+    def _on_clear_search_clicked(self):
+        self._customer_filter_active = None
+        self.customer_filter_banner.setVisible(False)
+
+        self.quick_search_input.blockSignals(True)
+        self.quick_search_input.clear()
+        self.quick_search_input.blockSignals(False)
+
+        self.filter_by_combo.blockSignals(True)
+        self.filter_by_combo.setCurrentIndex(0)  # "Quick Search"
+        self.filter_by_combo.blockSignals(False)
+        self._on_filter_mode_changed("Quick Search")  # signals were blocked above -- apply visibility manually
+
+        self.search_requested.emit({"mode": "quick_search", "value": ""})  # empty value -> show all
+
+    def apply_customer_filter(self, customer_id: int, customer_name: str):
+        """Called by main_window.py when navigating here from a Customer's
+        'View Ledger' action. Overrides everything else with an exact
+        customer_id match until cleared or a manual filter mode is chosen."""
+        self._customer_filter_active = {"mode": "customer_id", "customer_id": customer_id}
+        self.lbl_customer_filter.setText(f"Showing ledger for: {customer_name} (Customer #{customer_id})")
+        self.customer_filter_banner.setVisible(True)
+        self.search_requested.emit(self._customer_filter_active)
+
+    def _on_clear_customer_filter(self):
+        self._customer_filter_active = None
+        self.customer_filter_banner.setVisible(False)
+        self.search_requested.emit(self.get_current_filter())  # re-run using whatever the filter bar is currently set to
 
     def _on_export_excel_clicked(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Excel Ledger", "", "Excel Files (*.xlsx)")

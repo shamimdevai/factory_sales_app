@@ -40,7 +40,7 @@ class DashboardView(QWidget):
         layout.setContentsMargins(15, 12, 15, 12)
         layout.setSpacing(12)
 
-        input_style = "QComboBox, QSpinBox, QDateEdit { padding: 5px; border: 1px solid #cbd5e1; border-radius: 4px; background: white; }"
+        input_style = theme.input_style("QComboBox, QSpinBox, QDateEdit")
 
         layout.addWidget(QLabel("View:"))
         self.view_mode_combo = QComboBox()
