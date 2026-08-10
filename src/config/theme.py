@@ -1,13 +1,18 @@
 """
-Central UI theme — background/card/border/accent colors shared across every page.
+Central UI theme — background/card/border/accent colors, AND responsive layout
+behavior (table column sizing, sidebar scaling) shared across every page.
 
 Deliberately separate from src/config/company_config.py:
   - company_config.py = CLIENT branding (name, logo, status colors) — swap per client
-  - theme.py           = APP look-and-feel (backgrounds, accents) — change once, applies
-                          everywhere, independent of which client's data is loaded
+  - theme.py           = APP look-and-feel + responsive behavior — change once,
+                          applies everywhere, independent of which client's data is loaded
 
-To re-theme the whole app, edit the constants below. Nothing else needs to change.
+To re-theme the whole app, edit the constants below. To change how tables/sidebar
+respond to window resizing, edit configure_responsive_table() / the SIDEBAR_*
+constants below. Nothing else needs to change.
 """
+from PyQt6.QtWidgets import QHeaderView, QTableWidget
+from PyQt6.QtCore import QObject, QEvent
 
 # --- Page / layout backgrounds ---
 PAGE_BACKGROUND = "#EEF6F0"      # subtle mint-green tint for every page's content area
@@ -16,13 +21,47 @@ SIDEBAR_HOVER = "#34495E"
 CARD_BACKGROUND = "#FFFFFF"      # cards/frames/tables stay white for contrast + readability
 BORDER_COLOR = "#CBD5E1"
 
+
 # --- Brand accent (buttons, active nav, selection highlight) ---
 ACCENT = "#1ABC9C"
 ACCENT_DARK = "#16A085"
 
+
 # --- Text (Drop-Down Menu) ---
 TEXT_PRIMARY = "#2C3E50"
 TEXT_MUTED = "#7F8C8D"
+
+
+# --- Frozen/footer summary row (e.g. Customer Purchase Summary TOTAL row) ---
+TOTALS_ROW_BACKGROUND = "#E8F4F8"  # pale blue-gray -- distinct from PAGE_BACKGROUND's mint tint
+
+
+# --- Customer Status (tier) badge colors ---
+# Assigned by RANK POSITION (highest tier first = index 0), not by tier name --
+# your top-ranked tier always gets the first color here regardless of what
+# you've named it in Settings. Add more colors if you define more than 6
+# tiers; extras beyond the list fall back to ACCENT. Customers with no
+# qualifying tier ("Standard") use STATUS_STANDARD_COLOR. Used by both the
+# Customers page and the Invoice Terminal's customer picker -- change it once
+# here and both pick it up automatically.
+STATUS_TIER_PALETTE = ["#b8860b", "#95a5a6", "#cd7f32", "#1abc9c", "#3498db", "#9b59b6"]
+STATUS_STANDARD_COLOR = TEXT_MUTED
+
+
+# --- Responsive table behavior ---
+TABLE_MIN_SECTION_SIZE = 60  # global floor (px) for any column -- below this, horizontal
+                              # scrolling kicks in rather than squeezing text unreadably
+
+# --- Sidebar sizing -- change SIDEBAR_WIDTH and/or SIDEBAR_LOGO_WIDTH_RATIO
+# here and both the panel and the logo stay proportionate to each other,
+# instead of being two independent numbers you have to re-tune together. ---
+SIDEBAR_WIDTH = 240              # fixed sidebar panel width (px)
+SIDEBAR_LOGO_WIDTH_RATIO = 0.55  # logo width as a fraction of SIDEBAR_WIDTH
+SIDEBAR_BRAND_FONT_SIZE = 16
+
+
+# --- Responsive page-header buttons (e.g. "+ Add Customer" collapsing to icon-only) ---
+HEADER_BUTTON_COMPACT_BREAKPOINT = 650  # container width (px) below which registered buttons go icon-only
 
 
 def card_frame_style() -> str:
@@ -57,3 +96,112 @@ def combobox_dropdown_style() -> str:
             padding: 4px;
         }}
     """
+
+
+def sidebar_logo_size() -> int:
+    """Logo pixmap size (px, square) — always SIDEBAR_LOGO_WIDTH_RATIO of
+    SIDEBAR_WIDTH, so changing either constant above keeps the logo
+    proportionate to the panel automatically, no manual re-tuning needed."""
+    return int(SIDEBAR_WIDTH * SIDEBAR_LOGO_WIDTH_RATIO)
+
+
+def totals_row_style() -> str:
+    """Frozen/footer totals-row table styling — pale accent-tinted band with a
+    top accent border. Used by any page showing a pinned summary row below a
+    scrollable data table (e.g. Customer Purchase Summary)."""
+    return f"QTableWidget {{ background: {TOTALS_ROW_BACKGROUND}; border: none; border-top: 2px solid {ACCENT}; }}"
+
+
+def configure_responsive_table(table: QTableWidget, columns: list, min_section_size: int = TABLE_MIN_SECTION_SIZE):
+    """
+    Makes a QTableWidget's columns responsive to window resizing instead of
+    fixed pixel widths that just trigger horizontal scrolling.
+
+    columns: ordered list of (width_px, mode) tuples, one per column, in the
+    table's actual column order:
+      - width_px: initial/preferred width. For "stretch" columns this also
+        establishes the RATIO between columns -- Qt's Stretch resize mode
+        preserves relative proportions between stretch columns as the table
+        resizes (using each column's size at the moment Stretch is applied
+        as the baseline), so setting these widths first and switching modes
+        second is what makes proportional (not equal-split) responsiveness work.
+      - mode: "stretch" (grows/shrinks with the window, keeping proportions)
+        or "fixed" (stays exactly width_px regardless of resizing -- use for
+        narrow action/icon columns that shouldn't grow).
+
+    Also hides the default row-number column (vertical header) and applies
+    the shared minimum column width floor, so every table in the app that
+    goes through this helper behaves consistently without each caller having
+    to remember every individual setting.
+
+    IMPORTANT CALL ORDER: call this BEFORE setHorizontalHeaderLabels(). This
+    function sets the table's column count; setHorizontalHeaderLabels() on a
+    table that still has 0 columns silently discards the labels (Qt only
+    attaches header text to columns that already exist).
+    """
+    table.setColumnCount(len(columns))
+    header = table.horizontalHeader()
+    header.setMinimumSectionSize(min_section_size)
+
+    # Pass 1: set explicit pixel widths for every column while resize mode is
+    # still Interactive (the QTableWidget default) -- this establishes the
+    # baseline proportions Stretch mode will preserve once applied below.
+    for col, (width, _mode) in enumerate(columns):
+        table.setColumnWidth(col, width)
+
+    # Pass 2: apply the actual resize modes now that baseline widths are set.
+    for col, (_width, mode) in enumerate(columns):
+        resize_mode = QHeaderView.ResizeMode.Fixed if mode == "fixed" else QHeaderView.ResizeMode.Stretch
+        header.setSectionResizeMode(col, resize_mode)
+
+    table.verticalHeader().setVisible(False)  # no default row-number column, app-wide
+
+class _ResponsiveButtonFilter(QObject):
+    """Watches a container widget's resize events and swaps each registered
+    button between its full label and a compact (icon-only) label once the
+    container drops below a width breakpoint -- keeps header-style button
+    rows (page titles + action buttons) from silently overflowing/getting
+    clipped on narrow windows instead of actually adapting to the space."""
+
+    def __init__(self, container, button_specs, breakpoint_width):
+        super().__init__(container)  # Qt-parented to the container -> stays alive with it
+        self._container = container
+        self._button_specs = button_specs  # list of (button, full_text, compact_text)
+        self._breakpoint = breakpoint_width
+        self._compact = None  # tracks current state so we don't call setText redundantly
+        container.installEventFilter(self)
+        self._apply(container.width())
+
+    def eventFilter(self, obj, event):
+        if obj is self._container and event.type() == QEvent.Type.Resize:
+            self._apply(obj.width())
+        return False
+
+    def _apply(self, width: int):
+        compact = width < self._breakpoint
+        if compact == self._compact:
+            return
+        self._compact = compact
+        for button, full_text, compact_text in self._button_specs:
+            button.setText(compact_text if compact else full_text)
+            # Full label is hidden in compact mode -- tooltip is the only way
+            # to see what the icon-only button actually does, so show it only
+            # when needed (no point showing a tooltip when the text is already visible).
+            button.setToolTip(full_text if compact else "")
+
+
+def install_responsive_buttons(container, button_specs: list, breakpoint_width: int = HEADER_BUTTON_COMPACT_BREAKPOINT):
+    """Registers (button, full_text, compact_text) tuples on a container
+    widget (typically a page's top-level QWidget) so those buttons collapse
+    to their compact/icon-only label once the container's width drops below
+    breakpoint_width, and restore automatically once it grows back.
+
+    Usage:
+        self._header_filter = theme.install_responsive_buttons(self, [
+            (self.btn_refresh, "🔄 Refresh", "🔄"),
+            (self.btn_add, "+ Add Customer", "+"),
+        ])
+
+    Keep the returned object referenced (e.g. assign to self.<name> as shown)
+    for as long as the container exists."""
+    return _ResponsiveButtonFilter(container, button_specs, breakpoint_width)

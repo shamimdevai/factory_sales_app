@@ -2,15 +2,9 @@ from PyQt6.QtWidgets import QMessageBox
 from src.database.connection import get_db_session
 from src.database.models import Customer, CustomerType, CustomerTier
 from src.views.customer_view import CustomerView, CustomerDialog
-from src.utils.tier_engine import evaluate_customer_status
+from src.utils.tier_engine import evaluate_customer_status, build_status_color_map
 from src.utils.time_utils import to_local_str
 from src.config import theme
-
-# Local presentation-only palette for Status badges, ordered most-exclusive-first
-# (i.e. index 0 = whichever tier currently has the highest rank). Not centralized
-# in theme.py since these are data-driven badge colors, not app chrome (Rule 9).
-_STATUS_PALETTE = ["#b8860b", "#95a5a6", "#cd7f32", "#1abc9c", "#3498db", "#9b59b6"]
-_STANDARD_COLOR = theme.TEXT_MUTED
 
 
 class CustomerController:
@@ -30,34 +24,28 @@ class CustomerController:
         types = session.query(CustomerType).order_by(CustomerType.name.asc()).all()
         return [{"id": t.id, "name": t.name} for t in types]
 
-    @staticmethod
-    def _tier_color_map(session) -> dict:
-        tiers_desc = session.query(CustomerTier).order_by(CustomerTier.rank.desc()).all()
-        color_map = {}
-        for i, t in enumerate(tiers_desc):
-            color_map[t.id] = _STATUS_PALETTE[i] if i < len(_STATUS_PALETTE) else theme.ACCENT
-        return color_map
-
     def refresh_all(self):
         """Recomputes the full Directory + Pivot dataset in one pass. Called on
         page load and on explicit Refresh -- NEVER per-row/per-repaint, since
         Status evaluation runs several queries per customer (tier_engine)."""
         try:
             with get_db_session() as session:
-                tier_colors = self._tier_color_map(session)
+                tier_colors, standard_color = build_status_color_map(
+                    session, theme.STATUS_STANDARD_COLOR, theme.STATUS_TIER_PALETTE
+                )
                 customers = session.query(Customer).order_by(Customer.name.asc()).all()
 
                 directory_rows = []
                 pivot_rows = []
                 totals = {
-                    "invoices": 0, "grand_total": 0.0, "discount": 0.0,
+                    "invoices": 0, "discount": 0.0, "grand_total": 0.0,
                     "paid": 0.0, "due": 0.0, "compost_kg": 0.0, "worms_kg": 0.0,
                 }
 
                 for cust in customers:
                     status_info = evaluate_customer_status(cust.id, session)
                     tier = status_info["effective_tier"]
-                    status_color = tier_colors.get(tier.id) if tier else _STANDARD_COLOR
+                    status_color = tier_colors.get(tier.id) if tier else standard_color
 
                     directory_rows.append({
                         "id": cust.id,
@@ -73,8 +61,8 @@ class CustomerController:
                     # records excluded, consistent with Dashboard/History).
                     root_invoices = [inv for inv in cust.invoices if not inv.is_due_payment]
                     total_invoices = len(root_invoices)
-                    total_grand = sum(inv.grand_total for inv in root_invoices)
                     total_discount = sum(inv.discount_amount for inv in root_invoices)
+                    total_grand = sum(inv.grand_total for inv in root_invoices)
                     total_paid = sum(inv.effective_paid_amount for inv in root_invoices)
                     total_due = sum(inv.effective_due_amount for inv in root_invoices)
                     last_purchase_dt = max((inv.created_at for inv in root_invoices), default=None)
@@ -91,8 +79,8 @@ class CustomerController:
                         "id": cust.id,
                         "name": cust.name,
                         "invoices": total_invoices,
-                        "grand_total": total_grand,
                         "discount": total_discount,
+                        "grand_total": total_grand,
                         "paid": total_paid,
                         "due": total_due,
                         "last_purchase": to_local_str(last_purchase_dt).split(" ")[0] if last_purchase_dt else None,
@@ -101,8 +89,8 @@ class CustomerController:
                     })
 
                     totals["invoices"] += total_invoices
-                    totals["grand_total"] += total_grand
                     totals["discount"] += total_discount
+                    totals["grand_total"] += total_grand
                     totals["paid"] += total_paid
                     totals["due"] += total_due
                     totals["compost_kg"] += compost_kg

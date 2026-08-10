@@ -35,7 +35,7 @@ class InvoiceController:
         Settings pages show up without restarting the app)."""
         try:
             with get_db_session() as session:
-                color_map, standard_color = build_status_color_map(session, theme.TEXT_MUTED)
+                color_map, standard_color = build_status_color_map(session, theme.STATUS_STANDARD_COLOR, theme.STATUS_TIER_PALETTE)
                 customers = session.query(Customer).order_by(Customer.name.asc()).all()
                 records = []
                 for c in customers:

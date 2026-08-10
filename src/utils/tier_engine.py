@@ -196,13 +196,18 @@ def evaluate_customer_status(customer_id: int, session, now: datetime = None) ->
         "base_display_name": base_display_name,
     }
 
-def build_status_color_map(session, standard_color: str = "#95a5a6"):
+def build_status_color_map(session, standard_color: str = "#95a5a6", palette: list = None):
     """Shared badge-color helper for any screen displaying Status. Returns
     (color_map, standard_color) where color_map is {tier.id: hex_color},
-    ordered most-exclusive-first (highest rank = index 0). `standard_color`
-    lets each caller supply its own UI-theme grey for 'no tier' customers."""
+    assigned by RANK POSITION (highest tier first = palette[0]).
+
+    UI callers should pass theme.STATUS_TIER_PALETTE and theme.STATUS_STANDARD_COLOR
+    explicitly, so the actual color scheme lives in one editable place
+    (theme.py) rather than here -- this module intentionally stays free of
+    any theme.py/UI import so it remains pure business logic. The defaults
+    below only exist as a safety net for callers that don't pass one."""
     tiers_desc = session.query(CustomerTier).order_by(CustomerTier.rank.desc()).all()
-    palette = ["#b8860b", "#95a5a6", "#cd7f32", "#1abc9c", "#3498db", "#9b59b6"]
+    palette = palette or ["#b8860b", "#95a5a6", "#cd7f32", "#1abc9c", "#3498db", "#9b59b6"]
     color_map = {}
     for i, t in enumerate(tiers_desc):
         color_map[t.id] = palette[i] if i < len(palette) else "#1ABC9C"

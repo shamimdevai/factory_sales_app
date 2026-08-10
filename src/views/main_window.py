@@ -39,26 +39,50 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # 1. Sidebar Panel
+        # NOTE: no setFixedWidth here anymore -- the wrapping QScrollArea below
+        # owns the fixed width (theme.SIDEBAR_WIDTH), and widgetResizable(True)
+        # makes this frame match it. This frame's height is now allowed to
+        # exceed the window's visible height without ever overlapping -- it
+        # just scrolls, exactly like every page's content already does via
+        # _wrap_scrollable().
         sidebar = QFrame()
-        sidebar.setFixedWidth(240)
         sidebar.setStyleSheet(f"QFrame {{ background-color: {theme.SIDEBAR_BACKGROUND}; border: none; }}")
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(15, 30, 15, 30)
         sidebar_layout.setSpacing(10)
-        # Change LOGO size here (130, 130 to whatever you want)
+
+        # Logo + brand stay at a fixed, always-legible size. The sidebar's own
+        # QScrollArea (below) is what handles a too-small window -- it just
+        # scrolls -- so there's no need to also shrink the logo/text dynamically;
+        # that was actually making the logo look small even on normal-sized
+        # windows whenever height dropped under the old 650px breakpoint.
         if cfg.COMPANY_LOGO_PATH:
+            logo_size = theme.sidebar_logo_size()
             logo_lbl = QLabel()
             pix = QPixmap(cfg.COMPANY_LOGO_PATH).scaled(
-                130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                logo_size, logo_size,
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_lbl.setPixmap(pix)
             logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            sidebar_layout.addWidget(logo_lbl)
+            # Wrapped in its own stretch-padded row so it's GUARANTEED centered
+            # horizontally, regardless of the label's own sizeHint width or any
+            # scrollbar-driven width quirks from the sidebar's QScrollArea --
+            # more reliable than relying on setAlignment() alone.
+            logo_row = QHBoxLayout()
+            logo_row.addStretch()
+            logo_row.addWidget(logo_lbl)
+            logo_row.addStretch()
+            sidebar_layout.addLayout(logo_row)
 
         brand_label = QLabel("Chashi-Bondhu\nSales Management")
-        brand_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        brand_label.setFont(QFont("Segoe UI", theme.SIDEBAR_BRAND_FONT_SIZE, QFont.Weight.Bold))
         brand_label.setStyleSheet("color: #ecf0f1; margin-bottom: 25px;")
         brand_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sidebar_layout.addWidget(brand_label)
+        brand_row = QHBoxLayout()
+        brand_row.addStretch()
+        brand_row.addWidget(brand_label)
+        brand_row.addStretch()
+        sidebar_layout.addLayout(brand_row)
 
         btn_style = f"""
             QPushButton {{
@@ -145,7 +169,23 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self._wrap_scrollable(self.settings_view))   # Index 4
         self.stacked_widget.addWidget(self._wrap_scrollable(self.profile_view))    # Index 5
 
-        layout.addWidget(sidebar)
+        # Wrapping the sidebar itself in a scroll area is what actually fixes
+        # small-window overlap: if the sidebar's real content (logo + brand +
+        # nav buttons + footer) needs more height than the window currently
+        # has, it now scrolls internally instead of Qt drawing everything
+        # overlapping on top of each other (which is what a fixed-height
+        # QFrame with no scroll area does when it's squeezed below its
+        # natural minimum size).
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidget(sidebar)
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFixedWidth(theme.SIDEBAR_WIDTH)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sidebar_scroll.setStyleSheet(f"QScrollArea {{ background-color: {theme.SIDEBAR_BACKGROUND}; border: none; }}")
+
+        layout.addWidget(sidebar_scroll)
         layout.addWidget(self.stacked_widget)
 
         self.dashboard_controller.refresh_dashboard_data(self.dashboard_view.get_current_period())

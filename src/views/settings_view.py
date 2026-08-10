@@ -131,7 +131,7 @@ class SettingsView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumWidth(700)
+        # self.setMinimumWidth(700)
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(25, 25, 25, 25)
@@ -147,6 +147,11 @@ class SettingsView(QWidget):
         self.main_layout.addWidget(self._create_rules_box())
         self.main_layout.addStretch()
 
+        self._header_button_filter = theme.install_responsive_buttons(self, [
+            (self.btn_add_tier, "+ Add Status Tier", "+"),
+            (self.btn_add_type, "+ Add Type", "+"),
+        ])
+
     # ---------------- Status Tiers ----------------
     def _create_tiers_box(self) -> QFrame:
         frame = QFrame()
@@ -160,10 +165,10 @@ class SettingsView(QWidget):
         lbl.setStyleSheet("border: none; color: #2c3e50;")
         header_row.addWidget(lbl)
         header_row.addStretch()
-        btn_add = QPushButton("+ Add Status Tier")
-        btn_add.setStyleSheet(_ADD_BTN)
-        btn_add.clicked.connect(self.add_tier_requested.emit)
-        header_row.addWidget(btn_add)
+        self.btn_add_tier = QPushButton("+ Add Status Tier")
+        self.btn_add_tier.setStyleSheet(_ADD_BTN)
+        self.btn_add_tier.clicked.connect(self.add_tier_requested.emit)
+        header_row.addWidget(self.btn_add_tier)
         layout.addLayout(header_row)
 
         note = QLabel("Order below = evaluation priority, highest first. Use ▲▼ to reorder.")
@@ -171,20 +176,13 @@ class SettingsView(QWidget):
         layout.addWidget(note)
 
         self.table_tiers = QTableWidget()
-        self.table_tiers.setColumnCount(5)
+        theme.configure_responsive_table(self.table_tiers, [
+            (160, "stretch"), (130, "stretch"), (90, "stretch"),
+            (90, "fixed"), (90, "fixed"),
+        ])
         self.table_tiers.setHorizontalHeaderLabels(["Status Name", "Min. Amount", "Period", "Reorder", "Actions"])
-        self.table_tiers.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table_tiers.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        self.table_tiers.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.table_tiers.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table_tiers.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        self.table_tiers.setColumnWidth(1, 130)
-        self.table_tiers.setColumnWidth(2, 90)
-        self.table_tiers.setColumnWidth(3, 90)
-        self.table_tiers.setColumnWidth(4, 90)
         self.table_tiers.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_tiers.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_tiers.verticalHeader().setVisible(False)
         self.table_tiers.setMinimumHeight(160)
         layout.addWidget(self.table_tiers)
 
@@ -246,21 +244,19 @@ class SettingsView(QWidget):
         lbl.setStyleSheet("border: none; color: #2c3e50;")
         header_row.addWidget(lbl)
         header_row.addStretch()
-        btn_add = QPushButton("+ Add Type")
-        btn_add.setStyleSheet(_ADD_BTN)
-        btn_add.clicked.connect(self.add_type_requested.emit)
-        header_row.addWidget(btn_add)
+        self.btn_add_type = QPushButton("+ Add Type")
+        self.btn_add_type.setStyleSheet(_ADD_BTN)
+        self.btn_add_type.clicked.connect(self.add_type_requested.emit)
+        header_row.addWidget(self.btn_add_type)
         layout.addLayout(header_row)
 
         self.table_types = QTableWidget()
-        self.table_types.setColumnCount(2)
+        theme.configure_responsive_table(self.table_types, [
+            (200, "stretch"), (90, "fixed"),
+        ])
         self.table_types.setHorizontalHeaderLabels(["Type Name", "Actions"])
-        self.table_types.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table_types.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.table_types.setColumnWidth(1, 90)
         self.table_types.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_types.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_types.verticalHeader().setVisible(False)
         self.table_types.setMinimumHeight(140)
         layout.addWidget(self.table_types)
 

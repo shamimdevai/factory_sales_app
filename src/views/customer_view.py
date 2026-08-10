@@ -13,7 +13,6 @@ _EDIT_BTN = "QPushButton { background-color: #3498db; color: white; font-size: 1
 _LEDGER_BTN = "QPushButton { background-color: #8e44ad; color: white; font-size: 11px; max-width: 28px; border-radius: 3px; } QPushButton:hover { background-color: #6c3483; }"
 _SAVE_BTN = "QPushButton { background-color: #27ae60; color: white; padding: 8px 16px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #219653; }"
 _ADD_BTN = f"QPushButton {{ background-color: {theme.ACCENT}; color: white; padding: 6px 14px; font-weight: bold; border-radius: 4px; }} QPushButton:hover {{ background-color: {theme.ACCENT_DARK}; }}"
-_TOTALS_ROW_BG = "#E8F4F8"  # pale blue-gray -- distinct from PAGE_BACKGROUND's mint tint, reads as a clear "summary" band
 
 
 class CustomerDialog(QDialog):
@@ -102,7 +101,8 @@ class CustomerView(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumWidth(950)
+        # self.setMinimumWidth(950)
+
         # Full unfiltered datasets, kept so the search box can filter row
         # visibility locally without re-querying the DB on every keystroke.
         self._directory_rows = []
@@ -119,17 +119,24 @@ class CustomerView(QWidget):
         header_row.addWidget(title)
         header_row.addStretch()
 
-        btn_refresh = QPushButton("🔄 Refresh")
-        btn_refresh.setStyleSheet(
+        self.btn_refresh = QPushButton("🔄 Refresh")
+        self.btn_refresh.setStyleSheet(
             "QPushButton { background-color: #34495e; color: white; padding: 6px 15px; font-weight: bold; border-radius: 4px; } QPushButton:hover { background-color: #2c3e50; }")
-        btn_refresh.clicked.connect(self.refresh_requested.emit)
-        header_row.addWidget(btn_refresh)
+        self.btn_refresh.clicked.connect(self.refresh_requested.emit)
+        header_row.addWidget(self.btn_refresh)
 
-        btn_add = QPushButton("+ Add Customer")
-        btn_add.setStyleSheet(_ADD_BTN)
-        btn_add.clicked.connect(self.add_customer_requested.emit)
-        header_row.addWidget(btn_add)
+        self.btn_add = QPushButton("+ Add Customer")
+        self.btn_add.setStyleSheet(_ADD_BTN)
+        self.btn_add.clicked.connect(self.add_customer_requested.emit)
+        header_row.addWidget(self.btn_add)
         self.main_layout.addLayout(header_row)
+
+        # Collapses to icon-only once this page gets too narrow for full
+        # button text -- instead of silently overflowing/getting clipped.
+        self._header_button_filter = theme.install_responsive_buttons(self, [
+            (self.btn_refresh, "🔄 Refresh", "🔄"),
+            (self.btn_add, "+ Add Customer", "+"),
+        ])
 
         # Shared search box -- filters row visibility in whichever tab is active.
         search_row = QHBoxLayout()
@@ -158,22 +165,14 @@ class CustomerView(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
 
         self.table_directory = QTableWidget()
-        self.table_directory.setColumnCount(6)
+        theme.configure_responsive_table(self.table_directory, [
+            (150, "stretch"), (120, "stretch"), (170, "stretch"),
+            (110, "stretch"), (100, "stretch"), (70, "fixed"),
+        ])
         self.table_directory.setHorizontalHeaderLabels(
             ["Name", "Phone", "Email", "Type", "Status", "Actions"])
-        header = self.table_directory.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        for col, width in enumerate([150, 120, 170, 110, 100]):
-            self.table_directory.setColumnWidth(col, width)
-        self.table_directory.setColumnWidth(5, 70)
         self.table_directory.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_directory.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_directory.verticalHeader().setVisible(False)  # no default row-number column
         self.table_directory.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table_directory.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table_directory.setStyleSheet(
@@ -225,23 +224,20 @@ class CustomerView(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(0)  # footer sits flush against the main table, like a frozen row
 
-        column_widths = [150, 70, 110, 100, 100, 100, 120, 100, 90, 60]
+        column_spec = [
+            (150, "stretch"), (70, "stretch"), (110, "stretch"), (100, "stretch"),
+            (100, "stretch"), (100, "stretch"), (120, "stretch"), (100, "stretch"),
+            (90, "stretch"), (60, "fixed"),
+        ]
 
         self.table_pivot = QTableWidget()
-        self.table_pivot.setColumnCount(10)
+        theme.configure_responsive_table(self.table_pivot, column_spec)
         self.table_pivot.setHorizontalHeaderLabels([
-            "Customer", "Invoices", "Grand Total", "Discount", "Paid", "Due",
+            "Customer", "Invoices", "Discount","Grand Total", "Paid", "Due",
             "Last Purchase", "Compost (kg)", "Worms (kg)", "Actions"
         ])
-        header = self.table_pivot.horizontalHeader()
-        for col in range(9):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
-        for col, width in enumerate(column_widths):
-            self.table_pivot.setColumnWidth(col, width)
         self.table_pivot.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_pivot.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_pivot.verticalHeader().setVisible(False)  # no default row-number column
         self.table_pivot.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table_pivot.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table_pivot.setStyleSheet(
@@ -249,21 +245,23 @@ class CustomerView(QWidget):
         layout.addWidget(self.table_pivot)
 
         # --- Frozen TOTAL footer: a second, 1-row table kept in sync with the
-        # main table's column widths and horizontal scroll position, so it's
-        # always visible no matter how far the customer list is scrolled --
-        # a plain QTableWidget can't natively "freeze" a single row. ---
+        # main table's LIVE (responsive) column widths and horizontal scroll
+        # position, so it's always visible regardless of scroll position or
+        # window size -- a plain QTableWidget can't natively "freeze" a row.
+        # Its own columns stay Fixed and are driven purely by mirroring the
+        # main table (rather than being independently responsive), avoiding
+        # any rounding drift between two separately-stretched headers. ---
         self.table_pivot_totals = QTableWidget(1, 10)
         self.table_pivot_totals.horizontalHeader().setVisible(False)
         self.table_pivot_totals.verticalHeader().setVisible(False)
-        for col, width in enumerate(column_widths):
+        for col, (width, _mode) in enumerate(column_spec):
             self.table_pivot_totals.setColumnWidth(col, width)
         self.table_pivot_totals.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table_pivot_totals.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table_pivot_totals.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_pivot_totals.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_pivot_totals.setFixedHeight(38)
-        self.table_pivot_totals.setStyleSheet(
-            f"QTableWidget {{ background: {_TOTALS_ROW_BG}; border: none; border-top: 2px solid {theme.ACCENT}; }}")
+        self.table_pivot_totals.setStyleSheet(theme.totals_row_style())
         layout.addWidget(self.table_pivot_totals)
 
         # Keep the footer's columns and horizontal scroll glued to the main table.
@@ -275,7 +273,7 @@ class CustomerView(QWidget):
         return tab
 
     def populate_pivot(self, rows: list, totals: dict):
-        """rows: list of dicts: {id, name, invoices, grand_total, discount, paid,
+        """rows: list of dicts: {id, name, invoices, discount, grand_total, paid,
         due, last_purchase, compost_kg, worms_kg}
         totals: dict of the same numeric keys, pre-summed across ALL customers --
         rendered in the separate frozen footer table (table_pivot_totals),
@@ -286,8 +284,8 @@ class CustomerView(QWidget):
         for row, c in enumerate(rows):
             self.table_pivot.setItem(row, 0, QTableWidgetItem(c["name"]))
             self._set_right_item(self.table_pivot, row, 1, str(c["invoices"]))
-            self._set_right_item(self.table_pivot, row, 2, f"{cfg.CURRENCY_SYMBOL} {c['grand_total']:,.2f}")
-            self._set_right_item(self.table_pivot, row, 3, f"{cfg.CURRENCY_SYMBOL} {c['discount']:,.2f}")
+            self._set_right_item(self.table_pivot, row, 2, f"{cfg.CURRENCY_SYMBOL} {c['discount']:,.2f}")
+            self._set_right_item(self.table_pivot, row, 3, f"{cfg.CURRENCY_SYMBOL} {c['grand_total']:,.2f}")
             self._set_right_item(self.table_pivot, row, 4, f"{cfg.CURRENCY_SYMBOL} {c['paid']:,.2f}")
             due_item = QTableWidgetItem(f"{cfg.CURRENCY_SYMBOL} {c['due']:,.2f}")
             due_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -321,8 +319,8 @@ class CustomerView(QWidget):
 
         self.table_pivot_totals.setItem(0, 0, _total_item(f"TOTAL ({len(rows)} customers)", align_right=False))
         self.table_pivot_totals.setItem(0, 1, _total_item(str(totals["invoices"])))
-        self.table_pivot_totals.setItem(0, 2, _total_item(f"{cfg.CURRENCY_SYMBOL} {totals['grand_total']:,.2f}"))
-        self.table_pivot_totals.setItem(0, 3, _total_item(f"{cfg.CURRENCY_SYMBOL} {totals['discount']:,.2f}"))
+        self.table_pivot_totals.setItem(0, 2, _total_item(f"{cfg.CURRENCY_SYMBOL} {totals['discount']:,.2f}"))
+        self.table_pivot_totals.setItem(0, 3, _total_item(f"{cfg.CURRENCY_SYMBOL} {totals['grand_total']:,.2f}"))
         self.table_pivot_totals.setItem(0, 4, _total_item(f"{cfg.CURRENCY_SYMBOL} {totals['paid']:,.2f}"))
         self.table_pivot_totals.setItem(0, 5, _total_item(f"{cfg.CURRENCY_SYMBOL} {totals['due']:,.2f}"))
         self.table_pivot_totals.setItem(0, 6, _total_item("—", align_right=False))  # not summable
