@@ -229,9 +229,11 @@ class MainWindow(QMainWindow):
         if index == 0:
             self.dashboard_controller.refresh_dashboard_data(self.dashboard_view.get_current_period())
         elif index == 1:
-            # Keeps the customer picker in sync with anything added/edited on
-            # the Customers or Settings pages since this page was last shown.
+            # Keeps the customer picker and product dropdown in sync with
+            # anything added/edited on the Customers or Settings pages since
+            # this page was last shown.
             self.invoice_controller.refresh_customer_list()
+            self.invoice_controller.refresh_product_list()
         elif index == 2:
             self.history_controller.load_records(self.history_view.get_current_filter())
         elif index == 3:

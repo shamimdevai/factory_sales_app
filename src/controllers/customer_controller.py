@@ -115,12 +115,16 @@ class CustomerController:
         try:
             with get_db_session() as session:
                 existing = session.query(Customer).filter(Customer.phone == data["phone"]).first()
-                if existing:
-                    QMessageBox.warning(
-                        self.view, "Duplicate Phone",
-                        f"A customer with phone '{data['phone']}' already exists ({existing.name})."
-                    )
-                    return
+                existing_name = existing.name if existing else None
+
+            if existing_name:
+                QMessageBox.warning(
+                    self.view, "Duplicate Phone",
+                    f"A customer with phone '{data['phone']}' already exists ({existing_name})."
+                )
+                return
+
+            with get_db_session() as session:
                 session.add(Customer(
                     name=data["name"], phone=data["phone"], email=data["email"] or None,
                     address=data["address"] or None, customer_type_id=data["customer_type_id"]
@@ -132,12 +136,16 @@ class CustomerController:
     def edit_customer(self, customer_id: int):
         with get_db_session() as session:
             customer = session.query(Customer).get(customer_id)
-            if not customer:
-                QMessageBox.critical(self.view, "Error", f"Customer #{customer_id} not found.")
-                return
-            type_choices = self._get_type_choices(session)
-            name, phone, email = customer.name, customer.phone, customer.email or ""
-            address, type_id = customer.address or "", customer.customer_type_id
+            if customer:
+                type_choices = self._get_type_choices(session)
+                name, phone, email = customer.name, customer.phone, customer.email or ""
+                address, type_id = customer.address or "", customer.customer_type_id
+            else:
+                type_choices = None
+
+        if type_choices is None:
+            QMessageBox.critical(self.view, "Error", f"Customer #{customer_id} not found.")
+            return
 
         dialog = CustomerDialog(
             self.view, type_choices=type_choices, name=name, phone=phone,
@@ -149,17 +157,21 @@ class CustomerController:
         data = dialog.get_data()
         try:
             with get_db_session() as session:
-                customer = session.query(Customer).get(customer_id)
-                if not customer:
-                    return
                 dup = session.query(Customer).filter(
                     Customer.phone == data["phone"], Customer.id != customer_id
                 ).first()
-                if dup:
-                    QMessageBox.warning(
-                        self.view, "Duplicate Phone",
-                        f"A customer with phone '{data['phone']}' already exists ({dup.name})."
-                    )
+                dup_name = dup.name if dup else None
+
+            if dup_name:
+                QMessageBox.warning(
+                    self.view, "Duplicate Phone",
+                    f"A customer with phone '{data['phone']}' already exists ({dup_name})."
+                )
+                return
+
+            with get_db_session() as session:
+                customer = session.query(Customer).get(customer_id)
+                if not customer:
                     return
                 customer.name = data["name"]
                 customer.phone = data["phone"]

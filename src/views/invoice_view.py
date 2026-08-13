@@ -12,7 +12,7 @@ from src.config import theme
 
 class InvoiceView(QWidget):
     # Custom signals for controller interaction
-    add_item_requested = pyqtSignal(str, float, float)  # Name, Quantity, Unit Price
+    add_item_requested = pyqtSignal(str, float, float, str)  # Name, Quantity, Unit Price, Unit
     remove_item_requested = pyqtSignal(int)              # Row Index
     billing_changed = pyqtSignal()                       # Discount/VAT/Adjustment edited — recompute totals
     submit_invoice_requested = pyqtSignal(dict)  # Full invoice payload
@@ -218,6 +218,20 @@ class InvoiceView(QWidget):
         for t in types:
             self.combo_new_type.addItem(t["name"], t["id"])
 
+    def populate_products(self, products: list):
+        """products: list of dicts {id, name, unit, default_price}, sorted by name.
+        Called on controller construction and again whenever the Invoice page is
+        switched back to, so Products added/edited/removed via Settings appear
+        without an app restart."""
+        self.combo_product.blockSignals(True)
+        self.combo_product.clear()
+        for p in products:
+            self.combo_product.addItem(p["name"], p)
+        self.combo_product.blockSignals(False)
+        if products:
+            self.combo_product.setCurrentIndex(0)
+        self._on_product_changed()
+
     def select_customer_by_id(self, customer_id: int):
         for i in range(self.combo_customer.count()):
             data = self.combo_customer.itemData(i)
@@ -244,8 +258,8 @@ class InvoiceView(QWidget):
         form.setSpacing(8)
 
         self.combo_product = QComboBox()
-        self.combo_product.addItems(["Premium Vermi-Compost", "Organic Earthworm Castings", "Compost Starter Culture", "Liquid Bio-Fertilizer"])
         self.combo_product.setStyleSheet(theme.input_style("QComboBox"))
+        self.combo_product.currentIndexChanged.connect(self._on_product_changed)
 
         self.spin_qty = QDoubleSpinBox()
         self.spin_qty.setRange(0.1, 10000.0)
@@ -253,7 +267,7 @@ class InvoiceView(QWidget):
         self.spin_qty.setSuffix(" kg")
 
         self.spin_price = QDoubleSpinBox()
-        self.spin_price.setRange(1.0, 100000.0)
+        self.spin_price.setRange(0.01, 100000.0)
         self.spin_price.setValue(25.0)
         self.spin_price.setPrefix(f"{cfg.CURRENCY_SYMBOL} ")
 
@@ -537,11 +551,26 @@ class InvoiceView(QWidget):
         return status, paid
 
     # --- Item cart handlers ------------------------------------------------
+    def _on_product_changed(self):
+        """Pre-fills Qty's unit suffix and Price with the selected product's
+        defaults. Both stay fully editable afterward -- this only sets a
+        starting point, per-invoice overrides are always allowed."""
+        data = self.combo_product.itemData(self.combo_product.currentIndex())
+        if isinstance(data, dict):
+            self.spin_qty.setSuffix(f" {data.get('unit', 'kg')}")
+            self.spin_price.setValue(data.get("default_price", 0.0) or 0.01)
+
     def _on_add_clicked(self):
+        if self.combo_product.count() == 0:
+            QMessageBox.warning(self, "No Products",
+                                "No products are configured yet. Add one from the Settings page first.")
+            return
         product_name = self.combo_product.currentText()
+        product_data = self.combo_product.itemData(self.combo_product.currentIndex())
+        unit = product_data.get("unit", "kg") if isinstance(product_data, dict) else "kg"
         qty = self.spin_qty.value()
         price = self.spin_price.value()
-        self.add_item_requested.emit(product_name, qty, price)
+        self.add_item_requested.emit(product_name, qty, price, unit)
 
     def _on_remove_clicked(self):
         current_row = self.table.currentRow()
@@ -591,7 +620,7 @@ class InvoiceView(QWidget):
         for idx, item in enumerate(items_list):
             self.table.insertRow(idx)
             self.table.setItem(idx, 0, QTableWidgetItem(item['name']))
-            self.table.setItem(idx, 1, QTableWidgetItem(f"{item['qty']:.2f} kg"))
+            self.table.setItem(idx, 1, QTableWidgetItem(f"{item['qty']:.2f} {item.get('unit', 'kg')}"))
             self.table.setItem(idx, 2, QTableWidgetItem(f"{cfg.CURRENCY_SYMBOL} {item['price']:,.2f}"))
             self.table.setItem(idx, 3, QTableWidgetItem(f"{cfg.CURRENCY_SYMBOL} {item['subtotal']:,.2f}"))
 

@@ -53,8 +53,22 @@ class AppSettings(Base):
     grace_days = Column(Integer, nullable=False, default=30)
     decay_step_days = Column(Integer, nullable=False, default=30)
     rank_hold_months = Column(Integer, nullable=False, default=6)  # how long an earned
+
     # Status level is kept after last qualifying, before it re-evaluates to current-period volume
 
+class Product(Base):
+    """Admin-managed sellable product/catalog item (e.g. Vermi-Compost, Earthworms).
+    Editable via Settings page. NOTE: InvoiceItem.product_name stores a plain string
+    SNAPSHOT of the name at time of sale (per the app's invoice-immutability rule) --
+    it does NOT foreign-key to this table. Renaming or deleting a Product here never
+    touches historical invoices; it only changes what's offered going forward."""
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    unit = Column(String(20), nullable=False, default="kg")  # e.g. "kg", "pcs", "L"
+    default_price = Column(Float, nullable=False,
+                            default=0.0)  # pre-fills Unit Price on Invoice Terminal, still editable per sale
 
 class Customer(Base):
     __tablename__ = "customers"

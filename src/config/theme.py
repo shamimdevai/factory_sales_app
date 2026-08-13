@@ -52,6 +52,13 @@ STATUS_STANDARD_COLOR = TEXT_MUTED
 TABLE_MIN_SECTION_SIZE = 60  # global floor (px) for any column -- below this, horizontal
                               # scrolling kicks in rather than squeezing text unreadably
 
+# --- Digital signature storage ceiling (Global Development Rule #4: signatures
+# are always resized to fit this exact box and stored as PNG bytes, never as
+# file paths). Single source of truth -- profile_view.py's SignatureEditorDialog
+# reads these instead of hardcoding 200/80.
+SIGNATURE_MAX_WIDTH = 200
+SIGNATURE_MAX_HEIGHT = 80
+
 # --- Sidebar sizing -- change SIDEBAR_WIDTH and/or SIDEBAR_LOGO_WIDTH_RATIO
 # here and both the panel and the logo stay proportionate to each other,
 # instead of being two independent numbers you have to re-tune together. ---

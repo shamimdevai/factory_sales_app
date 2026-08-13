@@ -157,13 +157,17 @@ class HistoryController:
         try:
             with get_db_session() as session:
                 invoice = session.query(Invoice).filter_by(id=invoice_id, is_due_payment=False).first()
-                if not invoice:
-                    QMessageBox.critical(self.view, "Error", f"Invoice #{invoice_id} not found.")
-                    return
-                customer_name = invoice.customer.name
-                grand_total = invoice.grand_total
-                paid_so_far = invoice.effective_paid_amount
-                due_amount = invoice.effective_due_amount
+                if invoice:
+                    customer_name = invoice.customer.name
+                    grand_total = invoice.grand_total
+                    paid_so_far = invoice.effective_paid_amount
+                    due_amount = invoice.effective_due_amount
+                else:
+                    customer_name = None
+
+            if customer_name is None:
+                QMessageBox.critical(self.view, "Error", f"Invoice #{invoice_id} not found.")
+                return
 
             if due_amount <= 0:
                 QMessageBox.information(self.view, "No Due", f"Invoice #{invoice_id} has no outstanding balance.")
@@ -200,24 +204,27 @@ class HistoryController:
         try:
             with get_db_session() as session:
                 root = session.query(Invoice).filter_by(id=invoice_id, is_due_payment=False).first()
-                if not root:
-                    QMessageBox.critical(self.view, "Error", f"Invoice #{invoice_id} not found.")
-                    return
+                if root:
+                    customer_name = root.customer.name
+                    chain = [{
+                        "id": root.id,
+                        "label": f"Invoice #{root.id} (Original Sale)",
+                        "date": to_local_str(root.created_at),
+                        "amount": root.paid_amount,
+                    }]
+                    for dp in sorted(root.due_payments, key=lambda x: x.created_at):
+                        chain.append({
+                            "id": dp.id,
+                            "label": f"Due Payment #{dp.id}",
+                            "date": to_local_str(dp.created_at),
+                            "amount": dp.paid_amount,
+                        })
+                else:
+                    customer_name = None
 
-                customer_name = root.customer.name
-                chain = [{
-                    "id": root.id,
-                    "label": f"Invoice #{root.id} (Original Sale)",
-                    "date": to_local_str(root.created_at),
-                    "amount": root.paid_amount,
-                }]
-                for dp in sorted(root.due_payments, key=lambda x: x.created_at):
-                    chain.append({
-                        "id": dp.id,
-                        "label": f"Due Payment #{dp.id}",
-                        "date": to_local_str(dp.created_at),
-                        "amount": dp.paid_amount,
-                    })
+            if customer_name is None:
+                QMessageBox.critical(self.view, "Error", f"Invoice #{invoice_id} not found.")
+                return
 
             dialog = PaymentHistoryDialog(self.view, invoice_id, customer_name, chain)
             dialog.reprint_requested.connect(self._reprint_chain_record)

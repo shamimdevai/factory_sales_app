@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
 from src.database.connection import get_db_session
-from src.database.models import Customer, CustomerType, Invoice, InvoiceItem, User
+from src.database.models import Customer, CustomerType, Invoice, InvoiceItem, Product, User
 from src.views.invoice_view import InvoiceView
 from src.utils.pdf_generator import PDFGenerator
 from src.utils.tier_engine import evaluate_customer_status, build_status_color_map
@@ -25,6 +25,23 @@ class InvoiceController:
         # left available as a hook in case a future feature needs it.
 
         self.refresh_customer_list()
+        self.refresh_product_list()
+
+    def refresh_product_list(self):
+        """Loads the admin-managed Product catalog (Settings page) into the
+        picker. Called on controller construction and again whenever
+        main_window.py switches back to the Invoice page, so products added/
+        edited/removed via Settings show up without an app restart."""
+        try:
+            with get_db_session() as session:
+                products = session.query(Product).order_by(Product.name.asc()).all()
+                records = [
+                    {"id": p.id, "name": p.name, "unit": p.unit, "default_price": p.default_price}
+                    for p in products
+                ]
+            self.view.populate_products(records)
+        except Exception as e:
+            QMessageBox.critical(self.view, "Error", f"Failed to load product list: {e}")
 
     def refresh_customer_list(self):
         """Loads all customers (with live Status) into the picker, plus the
@@ -66,12 +83,16 @@ class InvoiceController:
         try:
             with get_db_session() as session:
                 existing = session.query(Customer).filter(Customer.phone == data["phone"]).first()
-                if existing:
-                    QMessageBox.warning(
-                        self.view, "Duplicate Phone",
-                        f"A customer with phone '{data['phone']}' already exists ({existing.name})."
-                    )
-                    return
+                existing_name = existing.name if existing else None
+
+            if existing_name:
+                QMessageBox.warning(
+                    self.view, "Duplicate Phone",
+                    f"A customer with phone '{data['phone']}' already exists ({existing_name})."
+                )
+                return
+
+            with get_db_session() as session:
                 new_customer = Customer(
                     name=data["name"], phone=data["phone"], email=data["email"] or None,
                     address=data["address"] or None, customer_type_id=data["customer_type_id"]
@@ -85,12 +106,13 @@ class InvoiceController:
         except Exception as e:
             QMessageBox.critical(self.view, "Error", f"Failed to add customer: {e}")
 
-    def add_item_to_cart(self, name: str, qty: float, price: float):
+    def add_item_to_cart(self, name: str, qty: float, price: float, unit: str = "kg"):
         subtotal = qty * price
         self.cart_items.append({
             "name": name,
             "qty": qty,
             "price": price,
+            "unit": unit,
             "subtotal": subtotal
         })
         self._sync_view_data()
@@ -120,19 +142,23 @@ class InvoiceController:
             return
 
         try:
+            # 0. Verify the selected Customer exists BEFORE opening the write
+            # transaction, so the "not found" dialog never blocks on a live
+            # session/connection. Selection happens explicitly via the
+            # search/select combo or the inline "Add New Customer" flow in the
+            # Customer Details box -- no more blind overwrite-by-phone.
             with get_db_session() as session:
-                # 1. Fetch the selected Customer. Selection now happens explicitly
-                # via the search/select combo or the inline "Add New Customer"
-                # flow in the Customer Details box -- no more blind
-                # overwrite-by-phone (that used to silently rename a returning
-                # customer if the operator typed their name slightly differently).
-                customer = session.query(Customer).get(data["customer_id"])
-                if not customer:
-                    QMessageBox.critical(self.view, "Error",
-                                         "Selected customer was not found. Please reselect and try again.")
-                    return
+                customer_found = session.query(Customer.id).filter(Customer.id == data["customer_id"]).first()
 
-                # 2. Get active user or fallback operator
+            if not customer_found:
+                QMessageBox.critical(self.view, "Error",
+                                     "Selected customer was not found. Please reselect and try again.")
+                return
+
+            with get_db_session() as session:
+                customer = session.query(Customer).get(data["customer_id"])
+
+                # 1. Get active user or fallback operator
                 active_user = session.query(User).first()
                 if not active_user:
                     active_user = User(
@@ -144,7 +170,7 @@ class InvoiceController:
                     session.add(active_user)
                     session.flush()
 
-                # 3. Financial calculations
+                # 2. Financial calculations
 
                 # taxable_amount = subtotal − discount
                 # VAT_amount = taxable_amount × VAT_rate
@@ -161,7 +187,7 @@ class InvoiceController:
                 grand_total = max(taxable_amount + tax_amount + transport - adjustment, 0.0)
                 paid_amount = max(data.get("paid_amount", 0.0), 0.0)
 
-                # 4. Save Invoice Document
+                # 3. Save Invoice Document
                 invoice = Invoice(
                     customer_id=customer.id,
                     user_id=active_user.id,
@@ -178,7 +204,7 @@ class InvoiceController:
                 session.add(invoice)
                 session.flush()
 
-                # 5. Save Invoice Items
+                # 4. Save Invoice Items
                 for cart_item in self.cart_items:
                     item = InvoiceItem(
                         invoice_id=invoice.id,
@@ -189,18 +215,23 @@ class InvoiceController:
                     )
                     session.add(item)
 
-                session.commit()
+                # No manual session.commit() here -- get_db_session() commits
+                # automatically when the `with` block exits normally. Grab the
+                # id/total now while the row is still attached to the session.
+                invoice_id = invoice.id
+                issued_total = grand_total
 
-                QMessageBox.information(
-                    self.view, "Success",
-                    f"Invoice #{invoice.id} issued successfully!\nTotal: {cfg.CURRENCY_SYMBOL} {grand_total:,.2f}"
-                )
+            # Modal + UI reset happen AFTER the transaction has closed, so
+            # nothing keeps the DB connection open while waiting on the user.
+            QMessageBox.information(
+                self.view, "Success",
+                f"Invoice #{invoice_id} issued successfully!\nTotal: {cfg.CURRENCY_SYMBOL} {issued_total:,.2f}"
+            )
 
-                # Reset State
-                self.cart_items.clear()
-                self._sync_view_data()
-                self.view.clear_inputs()
-                self.view.enable_pdf_button(invoice.id)
+            self.cart_items.clear()
+            self._sync_view_data()
+            self.view.clear_inputs()
+            self.view.enable_pdf_button(invoice_id)
 
         except Exception as e:
             QMessageBox.critical(self.view, "Database Error", f"Failed to save invoice: {str(e)}")

@@ -6,6 +6,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from src.config import theme
+from src.config import company_config as cfg
+
 
 # --- Local one-off semantic button colors (per Rule 9 -- not centralized) ---
 _EDIT_BTN = "QPushButton { background-color: #3498db; color: white; border-radius: 3px; } QPushButton:hover { background-color: #2980b9; }"
@@ -113,6 +115,75 @@ class TypeDialog(QDialog):
         return self.txt_name.text().strip()
 
 
+class ProductDialog(QDialog):
+    """Add/Edit a Product catalog entry (name, unit, default price). Pure GUI -- no DB access."""
+
+    _COMMON_UNITS = ["kg", "g", "L", "ml", "pcs", "box", "bag", "ton"]
+
+    def __init__(self, parent, name: str = "", unit: str = "kg", default_price: float = 0.0):
+        super().__init__(parent)
+        self.setWindowTitle("Product")
+        self.setMinimumWidth(320)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self.txt_name = QLineEdit(name)
+        self.txt_name.setStyleSheet(theme.input_style("QLineEdit"))
+        form.addRow("Product Name:", self.txt_name)
+
+        # Editable combo: pick a common unit or type a custom one (e.g. "bag", "ton").
+        self.combo_unit = QComboBox()
+        self.combo_unit.setEditable(True)
+        self.combo_unit.addItems(self._COMMON_UNITS)
+        if unit and unit not in self._COMMON_UNITS:
+            self.combo_unit.addItem(unit)
+        self.combo_unit.setCurrentText(unit or "kg")
+        self.combo_unit.setStyleSheet(theme.input_style("QComboBox"))
+        form.addRow("Unit:", self.combo_unit)
+
+        self.spin_price = QDoubleSpinBox()
+        self.spin_price.setRange(0.01, 100_000_000.0)
+        self.spin_price.setDecimals(2)
+        self.spin_price.setPrefix(f"{cfg.CURRENCY_SYMBOL} ")
+        self.spin_price.setValue(max(default_price, 0.01))
+        self.spin_price.setStyleSheet(theme.input_style("QDoubleSpinBox"))
+        form.addRow("Default Unit Price:", self.spin_price)
+
+        layout.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("Save")
+        btn_ok.setStyleSheet(_SAVE_BTN)
+        btn_ok.clicked.connect(self._validate_and_accept)
+        btn_row.addWidget(btn_cancel)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_ok)
+        layout.addLayout(btn_row)
+
+    def _validate_and_accept(self):
+        if not self.txt_name.text().strip():
+            QMessageBox.warning(self, "Missing Name", "Please enter a product name.")
+            return
+        if not self.combo_unit.currentText().strip():
+            QMessageBox.warning(self, "Missing Unit", "Please enter or select a unit.")
+            return
+        self.accept()
+
+    def get_data(self) -> dict:
+        return {
+            "name": self.txt_name.text().strip(),
+            "unit": self.combo_unit.currentText().strip(),
+            "default_price": self.spin_price.value(),
+        }
+
+
 class SettingsView(QWidget):
     # Status tiers
     add_tier_requested = pyqtSignal()
@@ -123,8 +194,13 @@ class SettingsView(QWidget):
 
     # Customer types
     add_type_requested = pyqtSignal()
-    edit_type_requested = pyqtSignal(int)     # type id
-    delete_type_requested = pyqtSignal(int)   # type id
+    edit_type_requested = pyqtSignal(int)  # type id
+    delete_type_requested = pyqtSignal(int)  # type id
+
+    # Products
+    add_product_requested = pyqtSignal()
+    edit_product_requested = pyqtSignal(int)  # product id
+    delete_product_requested = pyqtSignal(int)  # product id
 
     # Status rules
     save_rules_requested = pyqtSignal(int, int, int)  # grace_days, decay_step_days, rank_hold_months
@@ -144,12 +220,14 @@ class SettingsView(QWidget):
 
         self.main_layout.addWidget(self._create_tiers_box())
         self.main_layout.addWidget(self._create_types_box())
+        self.main_layout.addWidget(self._create_products_box())
         self.main_layout.addWidget(self._create_rules_box())
         self.main_layout.addStretch()
 
         self._header_button_filter = theme.install_responsive_buttons(self, [
             (self.btn_add_tier, "+ Add Status Tier", "+"),
             (self.btn_add_type, "+ Add Type", "+"),
+            (self.btn_add_product, "+ Add Product", "+"),
         ])
 
     # ---------------- Status Tiers ----------------
@@ -283,6 +361,69 @@ class SettingsView(QWidget):
             actions_layout.addWidget(btn_edit)
             actions_layout.addWidget(btn_delete)
             self.table_types.setCellWidget(row, 1, actions_widget)
+
+    # ---------------- Products ----------------
+    def _create_products_box(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet(theme.card_frame_style())
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        header_row = QHBoxLayout()
+        lbl = QLabel("Products")
+        lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        lbl.setStyleSheet("border: none; color: #2c3e50;")
+        header_row.addWidget(lbl)
+        header_row.addStretch()
+        self.btn_add_product = QPushButton("+ Add Product")
+        self.btn_add_product.setStyleSheet(_ADD_BTN)
+        self.btn_add_product.clicked.connect(self.add_product_requested.emit)
+        header_row.addWidget(self.btn_add_product)
+        layout.addLayout(header_row)
+
+        note = QLabel(
+            "Shown in the Invoice Terminal's product dropdown. Unit/Price pre-fill the sale form but stay editable per invoice.")
+        note.setStyleSheet(f"border: none; color: {theme.TEXT_MUTED}; font-size: 11px;")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        self.table_products = QTableWidget()
+        theme.configure_responsive_table(self.table_products, [
+            (200, "stretch"), (90, "fixed"), (140, "stretch"), (90, "fixed"),
+        ])
+        self.table_products.setHorizontalHeaderLabels(["Product Name", "Unit", "Default Price", "Actions"])
+        self.table_products.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table_products.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table_products.setMinimumHeight(140)
+        layout.addWidget(self.table_products)
+
+        return frame
+
+    def populate_products(self, products: list):
+        """products: list of dicts: {id, name, unit, default_price}"""
+        self.table_products.setRowCount(len(products))
+        for row, p in enumerate(products):
+            self.table_products.setItem(row, 0, QTableWidgetItem(p["name"]))
+            self.table_products.setItem(row, 1, QTableWidgetItem(p["unit"]))
+            self.table_products.setItem(row, 2,
+                                            QTableWidgetItem(f"{cfg.CURRENCY_SYMBOL} {p['default_price']:,.2f}"))
+
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(2, 2, 2, 2)
+            actions_layout.setSpacing(3)
+            btn_edit = QPushButton("✏️")
+            btn_delete = QPushButton("🗑️")
+            btn_edit.setStyleSheet(_EDIT_BTN)
+            btn_delete.setStyleSheet(_DELETE_BTN)
+            btn_edit.setFixedWidth(30)
+            btn_delete.setFixedWidth(30)
+            btn_edit.clicked.connect(lambda checked, pid=p["id"]: self.edit_product_requested.emit(pid))
+            btn_delete.clicked.connect(lambda checked, pid=p["id"]: self.delete_product_requested.emit(pid))
+            actions_layout.addWidget(btn_edit)
+            actions_layout.addWidget(btn_delete)
+            self.table_products.setCellWidget(row, 3, actions_widget)
+
 
     # ---------------- Status Rules ----------------
     def _create_rules_box(self) -> QFrame:

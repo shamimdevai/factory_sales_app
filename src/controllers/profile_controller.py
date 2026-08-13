@@ -1,5 +1,3 @@
-from PyQt6.QtGui import QImage, QPixmap
-from PyQt6.QtCore import Qt, QBuffer, QIODevice, QByteArray
 from src.database.connection import get_db_session
 from src.database.models import User
 from src.views.profile_view import ProfileView
@@ -10,7 +8,8 @@ class ProfileController:
     def __init__(self, view: ProfileView):
         self.view = view
         self.view.save_profile_requested.connect(self.update_user_profile)
-        self.view.signature_uploaded.connect(self.process_and_save_signature)
+        self.view.signature_saved.connect(self.save_signature)
+        self.view.signature_delete_requested.connect(self.delete_signature)
         self.load_operator_profile()
 
     def load_operator_profile(self):
@@ -18,12 +17,14 @@ class ProfileController:
             with get_db_session() as session:
                 user = session.query(User).first()
                 if user:
-                    self.view.load_user_profile(user.name, user.username, user.email)
-                    if user.digital_signature:
-                        # Convert binary BYTEA stream back into a Qt QPixmap
-                        pixmap = QPixmap()
-                        pixmap.loadFromData(user.digital_signature)
-                        self.view.set_signature_preview(pixmap)
+                    name, username, email = user.name, user.username, user.email
+                    signature_bytes = user.digital_signature
+                else:
+                    name = None
+
+            if name is not None:
+                self.view.load_user_profile(name, username, email)
+                self.view.set_signature_data(signature_bytes)
         except Exception as e:
             print(f"[Profile Query Failure]: {e}")
 
@@ -40,45 +41,46 @@ class ProfileController:
                     user.email = email
                     if password:
                         user.password_hash = password  # Stored simply for project scope (use hashed values in prod)
+                # No manual session.commit() needed -- get_db_session() commits
+                # automatically when this `with` block exits normally.
 
-                session.commit()
-                QMessageBox.information(self.view, "Profile Updated",
-                                        "Operator personal information saved successfully!")
+            QMessageBox.information(self.view, "Profile Updated",
+                                    "Operator personal information saved successfully!")
         except Exception as e:
             QMessageBox.critical(self.view, "Save Failed", str(e))
 
-    def process_and_save_signature(self, filepath: str):
+    def save_signature(self, png_bytes: bytes):
+        """png_bytes arrives already composited to theme.SIGNATURE_MAX_WIDTH x
+        SIGNATURE_MAX_HEIGHT by ProfileView's SignatureEditorDialog -- this
+        method's only job is persisting it."""
         try:
-            # 1. Load and scale image to normalize resolutions (Max 200x80px)
-            image = QImage(filepath)
-            if image.isNull():
-                raise ValueError("Could not read or parse chosen signature image file.")
-
-            scaled_image = image.scaled(200, 80, Qt.AspectRatioMode.KeepAspectRatio,
-                                        Qt.TransformationMode.SmoothTransformation)
-
-            # 2. Serialize image object into a raw byte stream
-            byte_array = QByteArray()
-            buffer = QBuffer(byte_array)
-            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            scaled_image.save(buffer, "PNG")  # Keep formatting uniform as transparent/lossless PNG
-            binary_signature_data = byte_array.data()
-
-            # 3. Commit bytes directly to PostgreSQL
             with get_db_session() as session:
                 user = session.query(User).first()
-                if user:
-                    user.digital_signature = binary_signature_data
-                    session.commit()
+                user_found = user is not None
+                if user_found:
+                    user.digital_signature = png_bytes
 
-                    # Update screen preview
-                    pixmap = QPixmap.fromImage(scaled_image)
-                    self.view.set_signature_preview(pixmap)
-                    QMessageBox.information(self.view, "Success",
-                                            "Digital signature updated and saved inside database successfully!")
-                else:
-                    QMessageBox.warning(self.view, "Missing Profile",
-                                        "Please save your operator personal data first before uploading a signature.")
-
+            if user_found:
+                self.view.set_signature_data(png_bytes)
+                QMessageBox.information(self.view, "Success", "Digital signature saved successfully!")
+            else:
+                QMessageBox.warning(self.view, "Missing Profile",
+                                    "Please save your operator personal data first before uploading a signature.")
         except Exception as e:
-            QMessageBox.critical(self.view, "Signature Processing Error", str(e))
+            QMessageBox.critical(self.view, "Signature Save Error", str(e))
+
+    def delete_signature(self):
+        try:
+            with get_db_session() as session:
+                user = session.query(User).first()
+                user_found = user is not None
+                if user_found:
+                    user.digital_signature = None
+
+            if user_found:
+                self.view.set_signature_data(None)
+                QMessageBox.information(self.view, "Deleted", "Digital signature removed.")
+            else:
+                QMessageBox.warning(self.view, "Missing Profile", "No operator profile found.")
+        except Exception as e:
+            QMessageBox.critical(self.view, "Delete Failed", str(e))
