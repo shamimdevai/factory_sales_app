@@ -86,7 +86,7 @@ class PDFGenerator:
         invoice_meta = f"""<br/>
             <b>INVOICE</b><br/>
             <b>Invoice ID:</b> #{invoice.id}<br/>
-            <b>Date:</b> {to_local_str(invoice.created_at)}<br/><br/>
+            <b>Date:</b> {invoice.invoice_date.strftime('%Y-%m-%d')}<br/><br/>
             <b>Status:</b> <font color="{status_color}"><b>{effective_status.upper()}</b></font>
             """
 
@@ -200,9 +200,12 @@ class PDFGenerator:
 
         # 3b. Due-payment trail note (only if any linked due-payments exist)
         if invoice.due_payments:
+            # Sort key stays on created_at for correct same-day ordering (see
+            # tier_engine.py's docstring note on invoice_date having no
+            # time-of-day); the displayed date uses invoice_date.
             sorted_payments = sorted(invoice.due_payments, key=lambda x: x.created_at)
             trail_ids = ", ".join(f"#{dp.id}" for dp in sorted_payments)
-            last_payment_date = to_local_str(sorted_payments[-1].created_at)
+            last_payment_date = sorted_payments[-1].invoice_date.strftime("%Y-%m-%d")
             trail_note = (
                 f'<font size="8" color="#7f8c8d">Additional due payment(s) recorded against this '
                 f'invoice: {trail_ids} (Date of last due payment: {last_payment_date}). '
@@ -315,7 +318,7 @@ class PDFGenerator:
             <b>PAYMENT RECEIPT</b><br/>
             <b>Receipt ID:</b> #{invoice.id}<br/>
             <b>Against Invoice:</b> #{root.id}<br/>
-            <b>Date:</b> {to_local_str(invoice.created_at)}
+            <b>Date:</b> {invoice.invoice_date.strftime('%Y-%m-%d')}
             """
         header_table = Table([[company_block, Paragraph(receipt_meta, styles['Normal'])]],
                              colWidths=[380, 160])
@@ -333,7 +336,7 @@ class PDFGenerator:
         # a continuation of the original sale, not a new product transaction.
         note_text = (
             f"This receipt records a payment received against the outstanding due balance of "
-            f"<b>Invoice #{root.id}</b>, originally issued on <b>{to_local_str(root.created_at)}</b>. "
+            f"<b>Invoice #{root.id}</b>, originally issued on <b>{root.invoice_date.strftime('%Y-%m-%d')}</b>. "
             f"It is a continuation of that sale and does not represent a new product transaction."
         )
         note_table = Table([[Paragraph(note_text, note_style)]], colWidths=[540])

@@ -1,5 +1,5 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, LargeBinary, DateTime, Boolean
+from datetime import datetime, timedelta
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, LargeBinary, DateTime, Boolean, Date
 from sqlalchemy.orm import relationship
 from src.database.base_class import Base
 
@@ -106,6 +106,21 @@ class Invoice(Base):
     paid_amount = Column(Float, nullable=False, default=0.0)       # How much the customer has actually paid
     payment_status = Column(String(20), nullable=False, default="Paid")  # Paid, Due, Partial Due
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # The BUSINESS/document date -- "the actual date of purchase." Used
+    # everywhere a screen/report groups, filters, sorts, or displays invoices
+    # by when the sale happened: Dashboard period filters + Recent Records,
+    # History Ledger, Customer Purchase Summary, tier_engine.py's period and
+    # grace/decay math, and the PDF's own "Date:" line. Defaults automatically
+    # to today's LOCAL date for every invoice (including due-payments) via
+    # the callable default below. Only the Invoice Terminal's "Backdate this
+    # invoice" checkbox overrides it, and only for root sale invoices.
+    #
+    # created_at (above) is intentionally left untouched by backdating -- it
+    # remains the one field that always tells the literal truth about when
+    # the database row was inserted (pure audit fact, never edited).
+    invoice_date = Column(Date, nullable=False, index=True,
+                          default=lambda: (datetime.utcnow() + timedelta(hours=6)).date())
 
     # Optional point-in-time snapshot of the customer's Status (Tier) label,
     # e.g. "Golden" -- set ONLY when the operator ticks "Add Customer Status

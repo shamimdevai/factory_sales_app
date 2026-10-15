@@ -1,8 +1,6 @@
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
 from src.database.connection import get_db_session
-from datetime import datetime, timedelta, time as dt_time
 from src.database.models import Customer, CustomerType, Invoice, InvoiceItem, Product, User
-from src.utils.time_utils import LOCAL_UTC_OFFSET_HOURS
 from src.views.invoice_view import InvoiceView
 from src.utils.pdf_generator import PDFGenerator
 from src.utils.tier_engine import evaluate_customer_status, build_status_color_map
@@ -190,6 +188,11 @@ class InvoiceController:
                 paid_amount = max(data.get("paid_amount", 0.0), 0.0)
 
                 # 3. Save Invoice Document
+                # invoice_date: if "Backdate this invoice" was used, this is the
+                # operator-picked date; otherwise leave it unset and the column's
+                # own default (today's local date) applies automatically.
+                # created_at is NEVER set explicitly here -- it always reflects
+                # the true moment this row was inserted, regardless of backdating.
                 invoice = Invoice(
                     customer_id=customer.id,
                     user_id=active_user.id,
@@ -204,17 +207,9 @@ class InvoiceController:
                     payment_status=data["payment_status"],
                     customer_status_snapshot=data.get("customer_status_snapshot"),
                 )
-
-                # Optional backdating: combine the operator-picked LOCAL date with
-                # the current LOCAL time-of-day, then convert to naive UTC to match
-                # created_at's storage convention (see time_utils.py). Leaving
-                # created_at unset (None here means "don't override") keeps the
-                # column's own datetime.utcnow default for the normal case.
                 custom_date = data.get("invoice_date")
                 if custom_date is not None:
-                    local_now = datetime.utcnow() + timedelta(hours=LOCAL_UTC_OFFSET_HOURS)
-                    local_dt = datetime.combine(custom_date, local_now.time())
-                    invoice.created_at = local_dt - timedelta(hours=LOCAL_UTC_OFFSET_HOURS)
+                    invoice.invoice_date = custom_date
 
                 session.add(invoice)
                 session.flush()

@@ -1,13 +1,9 @@
-from datetime import datetime, time
-from sqlalchemy import String
-from sqlalchemy import cast as sa_cast
 from src.database.connection import get_db_session
 from src.database.models import Invoice, Customer
 from src.views.history_view import HistoryView
 from src.views.due_payment_dialog import DuePaymentDialog, PaymentHistoryDialog
 from src.utils.excel_exporter import ExcelExporter
 from src.utils.pdf_generator import PDFGenerator
-from src.utils.time_utils import to_local_str
 from src.controllers.invoice_controller import InvoiceController
 from src.config import company_config as cfg
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
@@ -45,6 +41,11 @@ class HistoryController:
         after loading candidates rather than in SQL.
         Only root/original sale invoices are returned — due-payment records stay nested
         (accessible via the "History" action), same as before.
+
+        All ordering/filtering/display here is driven by invoice_date (the
+        business/purchase date) rather than created_at (the true DB-insert
+        timestamp) — a backdated invoice sorts, filters, and displays under
+        its real transaction date, not the day it happened to be typed in.
         """
         mode = filter_dict.get("mode", "quick_search")
 
@@ -53,7 +54,7 @@ class HistoryController:
 
             if mode == "quick_search":
                 value = (filter_dict.get("value") or "").strip().lower()
-                candidates = base_query.order_by(Invoice.created_at.desc()).all()
+                candidates = base_query.order_by(Invoice.invoice_date.desc(), Invoice.id.desc()).all()
                 if not value:
                     invoices = candidates
                 else:
@@ -63,7 +64,7 @@ class HistoryController:
                             str(inv.id),
                             inv.customer.name or "",
                             inv.customer.phone or "",
-                            to_local_str(inv.created_at),
+                            inv.invoice_date.strftime("%Y-%m-%d"),
                             inv.effective_status,
                             f"{inv.grand_total:.2f}",
                             f"{inv.effective_due_amount:.2f}",
@@ -72,15 +73,15 @@ class HistoryController:
                             invoices.append(inv)
 
             elif mode == "date":
-                start_dt = datetime.combine(filter_dict["start"].toPyDate(), time.min)
-                end_dt = datetime.combine(filter_dict["end"].toPyDate(), time.max)
+                start_date = filter_dict["start"].toPyDate()
+                end_date = filter_dict["end"].toPyDate()
                 invoices = base_query.filter(
-                    Invoice.created_at.between(start_dt, end_dt)
-                ).order_by(Invoice.created_at.desc()).all()
+                    Invoice.invoice_date.between(start_date, end_date)
+                ).order_by(Invoice.invoice_date.desc(), Invoice.id.desc()).all()
 
             elif mode == "status":
                 value = filter_dict.get("value", "")
-                candidates = base_query.order_by(Invoice.created_at.desc()).all()
+                candidates = base_query.order_by(Invoice.invoice_date.desc(), Invoice.id.desc()).all()
                 invoices = [inv for inv in candidates if inv.effective_status == value]
 
             elif mode == "customer_id":
@@ -89,7 +90,7 @@ class HistoryController:
                     raise ValueError("Invalid customer filter.")
                 invoices = base_query.filter(
                     Invoice.customer_id == customer_id
-                ).order_by(Invoice.created_at.desc()).all()
+                ).order_by(Invoice.invoice_date.desc(), Invoice.id.desc()).all()
 
             else:
                 invoices = []
@@ -97,7 +98,7 @@ class HistoryController:
             return [{
                 "id": inv.id,
                 "customer_name": inv.customer.name,
-                "date": to_local_str(inv.created_at),
+                "date": inv.invoice_date.strftime("%Y-%m-%d"),
                 "discount": inv.discount_amount,
                 "grand_total": inv.grand_total,
                 "due": inv.effective_due_amount,
@@ -209,14 +210,19 @@ class HistoryController:
                     chain = [{
                         "id": root.id,
                         "label": f"Invoice #{root.id} (Original Sale)",
-                        "date": to_local_str(root.created_at),
+                        "date": root.invoice_date.strftime("%Y-%m-%d"),
                         "amount": root.paid_amount,
                     }]
+                    # Sort key stays on created_at (true timestamp) so same-day
+                    # payments still order correctly -- invoice_date alone has
+                    # no time-of-day to break ties with. The DISPLAYED date
+                    # below still uses invoice_date, consistent with the rest
+                    # of the app.
                     for dp in sorted(root.due_payments, key=lambda x: x.created_at):
                         chain.append({
                             "id": dp.id,
                             "label": f"Due Payment #{dp.id}",
-                            "date": to_local_str(dp.created_at),
+                            "date": dp.invoice_date.strftime("%Y-%m-%d"),
                             "amount": dp.paid_amount,
                         })
                 else:

@@ -65,7 +65,7 @@ class CustomerController:
                     total_grand = sum(inv.grand_total for inv in root_invoices)
                     total_paid = sum(inv.effective_paid_amount for inv in root_invoices)
                     total_due = sum(inv.effective_due_amount for inv in root_invoices)
-                    last_purchase_dt = max((inv.created_at for inv in root_invoices), default=None)
+                    last_purchase_dt = max((inv.invoice_date for inv in root_invoices), default=None)
                     compost_kg = sum(
                         item.quantity for inv in root_invoices for item in inv.items
                         if "compost" in item.product_name.lower()
@@ -83,7 +83,7 @@ class CustomerController:
                         "grand_total": total_grand,
                         "paid": total_paid,
                         "due": total_due,
-                        "last_purchase": to_local_str(last_purchase_dt).split(" ")[0] if last_purchase_dt else None,
+                        "last_purchase": last_purchase_dt.strftime("%Y-%m-%d") if last_purchase_dt else None,
                         "compost_kg": compost_kg,
                         "worms_kg": worms_kg,
                     })

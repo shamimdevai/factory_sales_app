@@ -22,7 +22,8 @@ philosophy as Invoice.effective_status:
 
   2. DECAY: independent of the hold mechanic above. If the customer has any
      outstanding due balance, find the oldest unpaid root invoice. Let
-     age_days = days since that invoice was created.
+     age_days = days since that invoice's invoice_date (the actual purchase
+     date, not the day it was entered into the system).
        - age_days <= grace_days                                -> no penalty
        - grace_days < age_days <= grace_days + decay_step_days  -> no penalty
          (rank stays the same through the 1st full decay step)
@@ -30,41 +31,45 @@ philosophy as Invoice.effective_status:
          floored at "Standard" (can't go below the lowest tier / no tier).
 
   Final Status = base tier (with hold applied) minus decay downgrade steps.
+
+DATE BASIS: every period/age calculation here is driven by Invoice.invoice_date
+(the business/purchase date) rather than created_at (the true DB-insert
+timestamp) — a backdated invoice counts toward the tier period and decay
+clock of its REAL transaction date, not the day it happened to be entered.
 """
-from datetime import datetime, timedelta
+import calendar
+from datetime import date, timedelta
 from sqlalchemy import func
 from src.database.models import Customer, Invoice, CustomerTier, AppSettings
 
 STANDARD_LABEL = "Standard"
 
 
-def _month_window(year: int, month: int, now: datetime):
-    """Full calendar-month window [start, end), end clipped to 'now' if this
-    is the current (in-progress) month."""
-    start = datetime(year, month, 1)
-    if month == 12:
-        next_start = datetime(year + 1, 1, 1)
-    else:
-        next_start = datetime(year, month + 1, 1)
-    end = min(next_start, now)
-    return start, end
+def _month_window(year: int, month: int, today: date):
+    """Full calendar-month window [start_date, end_date], inclusive on both
+    ends, end clipped to 'today' if this is the current (in-progress) month."""
+    start_date = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    natural_end = date(year, month, last_day)
+    end_date = min(natural_end, today)
+    return start_date, end_date
 
 
-def _year_window(year: int, now: datetime):
-    """Full calendar-year window [start, end), end clipped to 'now' if this
-    is the current (in-progress) year."""
-    start = datetime(year, 1, 1)
-    next_start = datetime(year + 1, 1, 1)
-    end = min(next_start, now)
-    return start, end
+def _year_window(year: int, today: date):
+    """Full calendar-year window [start_date, end_date], inclusive on both
+    ends, end clipped to 'today' if this is the current (in-progress) year."""
+    start_date = date(year, 1, 1)
+    natural_end = date(year, 12, 31)
+    end_date = min(natural_end, today)
+    return start_date, end_date
 
 
-def _sum_grand_total(customer_id: int, session, start: datetime, end: datetime) -> float:
+def _sum_grand_total(customer_id: int, session, start_date: date, end_date: date) -> float:
     total = session.query(func.coalesce(func.sum(Invoice.grand_total), 0.0)).filter(
         Invoice.customer_id == customer_id,
         Invoice.is_due_payment == False,
-        Invoice.created_at >= start,
-        Invoice.created_at < end,
+        Invoice.invoice_date >= start_date,
+        Invoice.invoice_date <= end_date,
     ).scalar()
     return total or 0.0
 
@@ -80,61 +85,61 @@ def _get_settings(session) -> AppSettings:
     return settings
 
 
-def _find_held_anchor(customer_id: int, session, tier: CustomerTier, now: datetime, hold_months: int):
+def _find_held_anchor(customer_id: int, session, tier: CustomerTier, today: date, hold_months: int):
     """Walk backward through this tier's periods (current period first) looking
     for the most recent period that met the threshold. Returns that period's
-    end datetime (the 'anchor') if found within the hold window, else None."""
+    end date (the 'anchor') if found within the hold window, else None."""
     if tier.period == "yearly":
         max_offset = -(-hold_months // 12)  # ceil(hold_months / 12)
         for offset in range(0, max_offset + 1):
-            year = now.year - offset
-            start, end = _year_window(year, now)
-            if _sum_grand_total(customer_id, session, start, end) >= tier.min_amount:
-                return end
+            year = today.year - offset
+            start_date, end_date = _year_window(year, today)
+            if _sum_grand_total(customer_id, session, start_date, end_date) >= tier.min_amount:
+                return end_date
         return None
     else:  # "monthly"
         max_offset = hold_months
         for offset in range(0, max_offset + 1):
-            month_index = (now.year * 12 + (now.month - 1)) - offset
+            month_index = (today.year * 12 + (today.month - 1)) - offset
             year, month = divmod(month_index, 12)
             month += 1
-            start, end = _month_window(year, month, now)
-            if _sum_grand_total(customer_id, session, start, end) >= tier.min_amount:
-                return end
+            start_date, end_date = _month_window(year, month, today)
+            if _sum_grand_total(customer_id, session, start_date, end_date) >= tier.min_amount:
+                return end_date
         return None
 
 
-def _compute_base_tier(customer_id: int, session, now: datetime, hold_months: int):
+def _compute_base_tier(customer_id: int, session, today: date, hold_months: int):
     """Returns (tier, anchor_date) for the highest-rank CustomerTier this
     customer currently holds (earned now or within the hold window), or
     (None, None) for 'Standard'."""
     tiers_desc = session.query(CustomerTier).order_by(CustomerTier.rank.desc()).all()
 
     for tier in tiers_desc:
-        anchor = _find_held_anchor(customer_id, session, tier, now, hold_months)
+        anchor = _find_held_anchor(customer_id, session, tier, today, hold_months)
         if anchor is not None:
             return tier, anchor
 
     return None, None
 
 
-def _oldest_unpaid_invoice_age_days(customer_id: int, session, now: datetime):
-    """Days since the customer's longest-outstanding due balance was created.
-    Returns None if the customer has no root invoice with an outstanding
-    effective_due_amount right now (i.e. fully paid up)."""
+def _oldest_unpaid_invoice_age_days(customer_id: int, session, today: date):
+    """Days since the customer's longest-outstanding due balance's invoice_date
+    (the real purchase date). Returns None if the customer has no root invoice
+    with an outstanding effective_due_amount right now (i.e. fully paid up)."""
     root_invoices = session.query(Invoice).filter(
         Invoice.customer_id == customer_id,
         Invoice.is_due_payment == False,
-    ).order_by(Invoice.created_at.asc()).all()
+    ).order_by(Invoice.invoice_date.asc(), Invoice.id.asc()).all()
 
     for inv in root_invoices:
         if inv.effective_due_amount > 0.001:
-            return (now - inv.created_at).days
+            return (today - inv.invoice_date).days
 
     return None
 
 
-def evaluate_customer_status(customer_id: int, session, now: datetime = None) -> dict:
+def evaluate_customer_status(customer_id: int, session, now: date = None) -> dict:
     """Main entry point. Returns a dict describing the customer's current
     Status, ready for direct display:
 
@@ -142,16 +147,25 @@ def evaluate_customer_status(customer_id: int, session, now: datetime = None) ->
             "base_tier": CustomerTier | None,
             "effective_tier": CustomerTier | None,
             "downgrade_steps": int,
-            "held_since": datetime | None,   # anchor period-end that earned the base tier
+            "held_since": date | None,   # anchor period-end that earned the base tier
             "oldest_unpaid_days": int | None,
             "display_name": str,       # e.g. "Golden" or "Standard" -- USE THIS IN UI
             "base_display_name": str,  # what it *would* be with no overdue penalty
         }
+
+    `now` accepts a date (or datetime — .date() is applied automatically) for
+    callers that want to evaluate as-of a specific day; defaults to today.
     """
-    now = now or datetime.utcnow()
+    if now is None:
+        today = date.today()
+    elif hasattr(now, "date") and not isinstance(now, date):
+        today = now.date()  # a datetime was passed — normalize to its date
+    else:
+        today = now
+
     settings = _get_settings(session)
 
-    base_tier, held_since = _compute_base_tier(customer_id, session, now, settings.rank_hold_months)
+    base_tier, held_since = _compute_base_tier(customer_id, session, today, settings.rank_hold_months)
     base_display_name = base_tier.name if base_tier else STANDARD_LABEL
 
     if base_tier is None:
@@ -165,7 +179,7 @@ def evaluate_customer_status(customer_id: int, session, now: datetime = None) ->
             "base_display_name": STANDARD_LABEL,
         }
 
-    oldest_unpaid_days = _oldest_unpaid_invoice_age_days(customer_id, session, now)
+    oldest_unpaid_days = _oldest_unpaid_invoice_age_days(customer_id, session, today)
 
     downgrade_steps = 0
     if oldest_unpaid_days is not None:
