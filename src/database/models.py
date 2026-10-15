@@ -107,6 +107,16 @@ class Invoice(Base):
     payment_status = Column(String(20), nullable=False, default="Paid")  # Paid, Due, Partial Due
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+    # Optional point-in-time snapshot of the customer's Status (Tier) label,
+    # e.g. "Golden" -- set ONLY when the operator ticks "Add Customer Status
+    # at Invoice" on the Invoice Terminal. NULL otherwise (including for every
+    # due-payment record, which never goes through that checkbox). This is a
+    # plain string snapshot, exactly like InvoiceItem.product_name -- it does
+    # NOT change how Customer.Status is computed (still always live, never
+    # stored on Customer -- Rule #12 is untouched). Immutable once issued,
+    # same as every other Invoice field.
+    customer_status_snapshot = Column(String(50), nullable=True)
+
     # Due-payment chain: for a due-payment record, this always points to the ORIGINAL
     # root sale invoice (never to an intermediate due-payment), so balance math is a
     # flat sum instead of tree recursion. NULL for normal sale invoices.

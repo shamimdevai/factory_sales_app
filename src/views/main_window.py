@@ -28,7 +28,7 @@ from src.config import theme
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Chashi-Bondhu Sales Management Suite")
+        self.setWindowTitle("Sales Invoice Generator")
         self._apply_dynamic_minimum_size()
 
         main_widget = QWidget()
@@ -131,7 +131,7 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch()
 
-        footer = QLabel("v1.0.0 Production\nDeveloped By Shamim")
+        footer = QLabel("v1.1.0 Production\nDeveloped By Shamimdevai")
         footer.setFont(QFont("Segoe UI", 8))
         footer.setStyleSheet("color: #7f8c8d;")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)

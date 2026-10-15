@@ -104,12 +104,16 @@ class PDFGenerator:
         story.append(Spacer(1, 20))
 
         # 2. Bill To
+        customer_status_line = (
+            f"<br/><b>Customer Status:</b> {invoice.customer_status_snapshot}"
+            if invoice.customer_status_snapshot else ""
+        )
         bill_to_info = f"""<b>BILL TO:</b><br/>
-            <b>Name:</b> {customer.name}<br/>
-            <b>Phone:</b> {customer.phone}<br/>
-            <b>Email:</b> {customer.email if customer.email else 'N/A'}<br/>
-            <b>Address:</b> {customer.address if customer.address else 'N/A'}
-            """
+                    <b>Name:</b> {customer.name}<br/>
+                    <b>Phone:</b> {customer.phone}<br/>
+                    <b>Email:</b> {customer.email if customer.email else 'N/A'}<br/>
+                    <b>Address:</b> {customer.address if customer.address else 'N/A'}{customer_status_line}
+                    """
         bill_table = Table([[Paragraph(bill_to_info, styles['Normal'])]], colWidths=[540])
         bill_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), pstyle.hex_with_alpha(pstyle.CUSTOMER_INFO_BG)),

@@ -2,9 +2,9 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QMessageBox, QCheckBox,
-    QSizePolicy
+    QSizePolicy, QDateEdit
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QDate
 from PyQt6.QtGui import QFont
 from src.config import company_config as cfg
 from src.config import theme
@@ -24,6 +24,7 @@ class InvoiceView(QWidget):
         super().__init__()
         self.last_invoice_id = None
         self.current_grand_total = 0.0
+        self._current_customer_status_text = None
 
         # Minimum natural width for this screen's content. Below this, the
         # QScrollArea that main_window.py wraps every page in will show a
@@ -75,6 +76,27 @@ class InvoiceView(QWidget):
         lbl.setStyleSheet("border: none; color: #2c3e50;")
         layout.addWidget(lbl)
 
+        # --- Custom invoice date (backdating) -- collapsed to just a checkbox
+        # until ticked, so the normal "issue as of right now" flow (the vast
+        # majority of invoices) stays a single click of nothing extra. ---
+        date_row = QHBoxLayout()
+        self.chk_custom_date = theme.TickCheckBox("Backdate this invoice")
+        self.chk_custom_date.setStyleSheet("QCheckBox { border: none; color: #2c3e50; font-size: 11px; }")
+        self.chk_custom_date.toggled.connect(self._on_custom_date_toggled)
+        date_row.addWidget(self.chk_custom_date)
+
+        self.date_custom = QDateEdit()
+        self.date_custom.setCalendarPopup(True)
+        self.date_custom.setDisplayFormat("yyyy-MM-dd")
+        self.date_custom.setDate(QDate.currentDate())
+        self.date_custom.setMaximumDate(QDate.currentDate())  # no post-dating -- only backdating
+        self.date_custom.setStyleSheet(theme.input_style("QDateEdit"))
+        self.date_custom.setEnabled(False)
+        self.date_custom.setMaximumWidth(130)
+        date_row.addWidget(self.date_custom)
+        date_row.addStretch()
+        layout.addLayout(date_row)
+
         search_row = QHBoxLayout()
 
         # Editable combo + its built-in QCompleter, tuned for substring/case-
@@ -104,6 +126,15 @@ class InvoiceView(QWidget):
         self.lbl_customer_info.setWordWrap(True)
         self.lbl_customer_info.setVisible(False)
         layout.addWidget(self.lbl_customer_info)
+
+        # Optional -- ticking this snapshots the Status shown above onto the
+        # invoice/PDF as it stood at issue time. Purely opt-in per invoice;
+        # the customer's live Status (Settings/Customers pages) is completely
+        # unaffected either way.
+        self.chk_include_status = theme.TickCheckBox("Add Customer Status at Invoice")
+        self.chk_include_status.setStyleSheet("QCheckBox { border: none; color: #2c3e50; font-size: 11px; }")
+        self.chk_include_status.setVisible(False)
+        layout.addWidget(self.chk_include_status)
 
         # --- Inline "Add New Customer" panel (hidden until "+ New" is used) ---
         self.frame_new_customer = QFrame()
@@ -154,22 +185,40 @@ class InvoiceView(QWidget):
         layout.addWidget(self.frame_new_customer)
         return frame
 
+    # --- Custom invoice date handler ----------------------------------------
+    def _on_custom_date_toggled(self, checked: bool):
+        self.date_custom.setEnabled(checked)
+        if not checked:
+            self.date_custom.setDate(QDate.currentDate())
+
+    def get_invoice_date(self):
+        """Returns a python `date` if backdating is ticked, else None (meaning:
+        use the normal "right now" default, unchanged from before)."""
+        if self.chk_custom_date.isChecked():
+            return self.date_custom.date().toPyDate()
+        return None
+
     # --- Customer picker handlers ------------------------------------------
     def _on_customer_combo_changed(self, index: int):
         if index < 0:
             return
         data = self.combo_customer.itemData(index)
         if isinstance(data, dict):
+            self._current_customer_status_text = data['status_name']
             self.lbl_customer_info.setText(
                 f"Phone: {data['phone']}  |  Type: {data['type_name'] or '—'}  |  Status: {data['status_name']}"
             )
             self.lbl_customer_info.setVisible(True)
+            self.chk_include_status.setChecked(False)
+            self.chk_include_status.setVisible(True)
             self.frame_new_customer.setVisible(False)
             self.customer_selected.emit(data["id"])
 
     def _on_add_new_clicked(self):
         self.frame_new_customer.setVisible(True)
         self.lbl_customer_info.setVisible(False)
+        self.chk_include_status.setVisible(False)
+        self.chk_include_status.setChecked(False)
         self.combo_customer.blockSignals(True)
         self.combo_customer.setCurrentIndex(-1)  # back to the placeholder / no selection
         self.combo_customer.blockSignals(False)
@@ -364,7 +413,7 @@ class InvoiceView(QWidget):
         # Transportation — optional add-on, applied after VAT, before
         # Less Adjustment. Checkbox controls whether the amount field is even usable
         # and whether the row appears on the invoice/PDF at all; unchecked = 0, hidden.
-        self.chk_transport = QCheckBox("Transport:")
+        self.chk_transport = theme.TickCheckBox("Transport:")
         self.chk_transport.setStyleSheet(f"""
                     QCheckBox {{
                         color: {theme.TEXT_PRIMARY};
@@ -377,17 +426,6 @@ class InvoiceView(QWidget):
                     }}
                     QCheckBox:hover {{
                         border-color: {theme.ACCENT};
-                    }}
-                    QCheckBox::indicator {{
-                        width: 16px;
-                        height: 16px;
-                        border: 2px solid {theme.BORDER_COLOR};
-                        border-radius: 3px;
-                        background: {theme.CARD_BACKGROUND};
-                    }}
-                    QCheckBox::indicator:checked {{
-                        background-color: {theme.ACCENT};
-                        border-color: {theme.ACCENT_DARK};
                     }}
                 """)
         self.chk_transport.toggled.connect(self._on_transport_toggle)
@@ -604,6 +642,10 @@ class InvoiceView(QWidget):
             "transport_charge": self.get_transport_charge(),
             "show_transport_charge": self.is_transport_charge_shown(),
             "paid_amount": paid_amount,
+            "invoice_date": self.get_invoice_date(),
+            "customer_status_snapshot": (
+                self._current_customer_status_text if self.chk_include_status.isChecked() else None
+            ),
         })
 
     def _on_generate_pdf_clicked(self):
@@ -642,6 +684,10 @@ class InvoiceView(QWidget):
         self.combo_customer.setCurrentIndex(-1)
         self.combo_customer.blockSignals(False)
         self.lbl_customer_info.setVisible(False)
+        self.chk_include_status.setVisible(False)
+        self.chk_include_status.setChecked(False)
+        self.chk_custom_date.setChecked(False)
+        self.date_custom.setDate(QDate.currentDate())
         self.frame_new_customer.setVisible(False)
         self.spin_qty.setValue(10.0)
         self.spin_price.setValue(25.0)

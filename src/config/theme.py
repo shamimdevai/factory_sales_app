@@ -11,8 +11,9 @@ To re-theme the whole app, edit the constants below. To change how tables/sideba
 respond to window resizing, edit configure_responsive_table() / the SIDEBAR_*
 constants below. Nothing else needs to change.
 """
-from PyQt6.QtWidgets import QHeaderView, QTableWidget
-from PyQt6.QtCore import QObject, QEvent
+from PyQt6.QtWidgets import QHeaderView, QTableWidget, QCheckBox, QStyle, QStyleOptionButton
+from PyQt6.QtGui import QPainter, QPen, QColor
+from PyQt6.QtCore import Qt, QRectF, QPointF, QObject, QEvent
 
 # --- Page / layout backgrounds ---
 PAGE_BACKGROUND = "#EEF6F0"      # subtle mint-green tint for every page's content area
@@ -103,6 +104,49 @@ def combobox_dropdown_style() -> str:
             padding: 4px;
         }}
     """
+
+
+class TickCheckBox(QCheckBox):
+    """A QCheckBox that paints its own indicator box (black border + an actual
+    checkmark when checked) with QPainter, layered on top of Qt's normal
+    rendering. This exists because of a genuine Qt stylesheet limitation: as
+    soon as any QSS rule targets ::indicator, Qt stops drawing its own native
+    checkmark glyph entirely for every state -- so a visible custom border and
+    a visible tick mark can't both come from QSS alone. This needs zero
+    external assets/files and no stylesheet at all for the indicator. Use this
+    in place of plain QCheckBox everywhere in the app (Rule #9 -- one place
+    owns checkbox appearance)."""
+
+    def paintEvent(self, event):
+        # 1. Let Qt paint everything normally first -- label text, focus
+        # rect, and its own (too-faint-to-see) native indicator box.
+        super().paintEvent(event)
+
+        # 2. Paint our own indicator box directly on top, in the same rect
+        # Qt just used, fully covering the faint native one underneath.
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        indicator_rect = self.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator, opt, self
+        )
+        box = QRectF(indicator_rect).adjusted(1, 1, -1, -1)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#000000"), 2))
+        painter.setBrush(QColor(CARD_BACKGROUND))
+        painter.drawRoundedRect(box, 3, 3)
+
+        if self.isChecked():
+            pen = QPen(QColor(ACCENT), 2.3)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            x, y, w, h = box.x(), box.y(), box.width(), box.height()
+            painter.drawLine(QPointF(x + w * 0.20, y + h * 0.55), QPointF(x + w * 0.42, y + h * 0.78))
+            painter.drawLine(QPointF(x + w * 0.42, y + h * 0.78), QPointF(x + w * 0.82, y + h * 0.22))
+
+        painter.end()
 
 
 def sidebar_logo_size() -> int:
